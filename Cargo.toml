@@ -1,0 +1,40 @@
+[package]
+name = "rendy_playground"
+version = "0.1.0"
+authors = ["sim82 <simberger@gmail.com>"]
+edition = "2018"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+vulkan = []
+x11 = []
+spirv-reflection = []
+
+[dependencies]
+rendy = { version ="*", features = ["vulkan"]}
+rendy-texture = { version="*", features = ["image"]}
+failure = "0.1"
+gfx-backend-vulkan = {features = ["x11"]}
+# gfx-hal = {version = "0.3"}
+lazy_static = "*"
+log = "*"
+env_logger = "*"
+#failure = "*"
+rendy-wsi = "*"
+rendy-shader = "*"
+rand = "*"
+palette = "*"
+genmesh = "*"
+nalgebra = "*"
+# nalgebra-glm = "*"
+image = "*"
+winit = "*"
+num-traits = "*"
+
+[[example]]
+name = "triangle"
+required-features = ["vulkan", "spirv-reflection"]
+
+[[example]]
+name = "quads"
+required-features = ["vulkan", "spirv-reflection"]
