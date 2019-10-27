@@ -22,7 +22,7 @@ env_logger = "*"
 #failure = "*"
 rendy-wsi = "*"
 rendy-shader = "*"
-rand = "*"
+rand = "0.6"
 palette = "*"
 genmesh = "*"
 nalgebra = "*"
@@ -31,10 +31,3 @@ image = "*"
 winit = "*"
 num-traits = "*"
 
-[[example]]
-name = "triangle"
-required-features = ["vulkan", "spirv-reflection"]
-
-[[example]]
-name = "quads"
-required-features = ["vulkan", "spirv-reflection"]
