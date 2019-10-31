@@ -26,11 +26,7 @@ use {
     std::{cmp::min, mem::size_of, time},
 };
 
-#[cfg(feature = "spirv-reflection")]
 use rendy::shader::SpirvReflection;
-
-#[cfg(not(feature = "spirv-reflection"))]
-use rendy::mesh::AsVertex;
 
 #[cfg(feature = "dx12")]
 type Backend = rendy::dx12::Backend;
@@ -61,10 +57,7 @@ lazy_static::lazy_static! {
     static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
         .with_vertex(&*VERTEX).unwrap()
         .with_fragment(&*FRAGMENT).unwrap();
-}
 
-#[cfg(feature = "spirv-reflection")]
-lazy_static::lazy_static! {
     static ref SHADER_REFLECTION: SpirvReflection = SHADERS.reflect().unwrap();
 }
 
@@ -153,7 +146,6 @@ where
         hal::pso::ElemStride,
         hal::pso::VertexInputRate,
     )> {
-        #[cfg(feature = "spirv-reflection")]
         return vec![
             SHADER_REFLECTION
                 .attributes(&["position", "color", "normal"])
@@ -164,31 +156,10 @@ where
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
-
-        #[cfg(not(feature = "spirv-reflection"))]
-        return vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            Model::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ];
     }
 
     fn layout(&self) -> Layout {
-        #[cfg(feature = "spirv-reflection")]
         return SHADER_REFLECTION.layout().unwrap();
-
-        #[cfg(not(feature = "spirv-reflection"))]
-        return Layout {
-            sets: vec![SetLayout {
-                bindings: vec![hal::pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: hal::pso::DescriptorType::UniformBuffer,
-                    count: 1,
-                    stage_flags: hal::pso::ShaderStageFlags::GRAPHICS,
-                    immutable_samplers: false,
-                }],
-            }],
-            push_constants: Vec::new(),
-        };
     }
 
     fn build<'a>(
@@ -336,13 +307,9 @@ where
                 std::iter::empty(),
             );
 
-            #[cfg(feature = "spirv-reflection")]
             let vertex = [SHADER_REFLECTION
                 .attributes(&["position", "color", "normal"])
                 .unwrap()];
-
-            #[cfg(not(feature = "spirv-reflection"))]
-            let vertex = [PosColorNorm::vertex()];
 
             scene
                 .object_mesh
