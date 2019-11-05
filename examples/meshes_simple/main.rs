@@ -1,7 +1,5 @@
 //!
-//! The mighty triangle example.
-//! This examples shows colord triangle on white background.
-//! Nothing fancy. Just prove that `rendy` works.
+//! adapted from the rendy meshes demo
 //!
 
 #![cfg_attr(
@@ -9,7 +7,10 @@
     allow(unused)
 )]
 use {
-    genmesh::generators::{IndexedPolygon, SharedVertex},
+    genmesh::{
+        generators::{IndexedPolygon, SharedVertex},
+        Triangulate,
+    },
     rand::distributions::{Distribution, Uniform},
     rendy::{
         command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
@@ -19,19 +20,16 @@ use {
         },
         hal::{self, Device as _, PhysicalDevice as _},
         memory::Dynamic,
-        mesh::{Mesh, Model, PosColorNorm},
+        mesh::{Mesh, Model, PosColor},
         resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
         shader::{ShaderKind, SourceLanguage, SourceShaderInfo, SpirvShader},
         wsi::winit::{Event, EventsLoop, WindowBuilder, WindowEvent},
     },
+    rendy_playground::player,
     std::{cmp::min, mem::size_of, time},
 };
 
-#[cfg(feature = "spirv-reflection")]
 use rendy::shader::SpirvReflection;
-
-#[cfg(not(feature = "spirv-reflection"))]
-use rendy::mesh::AsVertex;
 
 #[cfg(feature = "dx12")]
 type Backend = rendy::dx12::Backend;
@@ -62,10 +60,7 @@ lazy_static::lazy_static! {
     static ref SHADERS: rendy::shader::ShaderSetBuilder = rendy::shader::ShaderSetBuilder::default()
         .with_vertex(&*VERTEX).unwrap()
         .with_fragment(&*FRAGMENT).unwrap();
-}
 
-#[cfg(feature = "spirv-reflection")]
-lazy_static::lazy_static! {
     static ref SHADER_REFLECTION: SpirvReflection = SHADERS.reflect().unwrap();
 }
 
@@ -82,9 +77,6 @@ struct Light {
 struct UniformArgs {
     proj: nalgebra::Matrix4<f32>,
     view: nalgebra::Matrix4<f32>,
-    lights_count: i32,
-    pad: [i32; 3],
-    lights: [Light; MAX_LIGHTS],
 }
 
 #[derive(Debug)]
@@ -104,23 +96,13 @@ struct Scene<B: hal::Backend> {
 const MAX_LIGHTS: usize = 32;
 const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
-const MODELS_SIZE: u64 = size_of::<Model>() as u64 * MAX_OBJECTS as u64;
-const INDIRECT_SIZE: u64 = size_of::<DrawIndexedCommand>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + MODELS_SIZE + INDIRECT_SIZE - 1) / align + 1) * align
+    ((UNIFORM_SIZE - 1) / align + 1) * align
 }
 
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
-}
-
-const fn models_offset(index: usize, align: u64) -> u64 {
-    uniform_offset(index, align) + UNIFORM_SIZE
-}
-
-const fn indirect_offset(index: usize, align: u64) -> u64 {
-    models_offset(index, align) + MODELS_SIZE
 }
 
 #[derive(Debug, Default)]
@@ -154,42 +136,14 @@ where
         hal::pso::ElemStride,
         hal::pso::VertexInputRate,
     )> {
-        #[cfg(feature = "spirv-reflection")]
-        return vec![
-            SHADER_REFLECTION
-                .attributes(&["position", "color", "normal"])
-                .unwrap()
-                .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            SHADER_REFLECTION
-                .attributes_range(3..7)
-                .unwrap()
-                .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ];
-
-        #[cfg(not(feature = "spirv-reflection"))]
-        return vec![
-            PosColorNorm::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
-            Model::vertex().gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
-        ];
+        return vec![SHADER_REFLECTION
+            .attributes(&["position", "color"])
+            .unwrap()
+            .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex)];
     }
 
     fn layout(&self) -> Layout {
-        #[cfg(feature = "spirv-reflection")]
         return SHADER_REFLECTION.layout().unwrap();
-
-        #[cfg(not(feature = "spirv-reflection"))]
-        return Layout {
-            sets: vec![SetLayout {
-                bindings: vec![hal::pso::DescriptorSetLayoutBinding {
-                    binding: 0,
-                    ty: hal::pso::DescriptorType::UniformBuffer,
-                    count: 1,
-                    stage_flags: hal::pso::ShaderStageFlags::GRAPHICS,
-                    immutable_samplers: false,
-                }],
-            }],
-            push_constants: Vec::new(),
-        };
     }
 
     fn build<'a>(
@@ -266,58 +220,19 @@ where
         index: usize,
         scene: &Scene<B>,
     ) -> PrepareResult {
+        println!("index: {}", index);
         unsafe {
             factory
                 .upload_visible_buffer(
                     &mut self.buffer,
                     uniform_offset(index, self.align),
                     &[UniformArgs {
-                        pad: [0, 0, 0],
                         proj: scene.camera.proj.to_homogeneous(),
-                        view: scene.camera.view.inverse().to_homogeneous(),
-                        lights_count: scene.lights.len() as i32,
-                        lights: {
-                            let mut array = [Light {
-                                pad: 0.0,
-                                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
-                                intencity: 0.0,
-                            }; MAX_LIGHTS];
-                            let count = min(scene.lights.len(), 32);
-                            array[..count].copy_from_slice(&scene.lights[..count]);
-                            array
-                        },
+                        view: scene.camera.view.to_homogeneous(),
                     }],
                 )
                 .unwrap()
         };
-
-        unsafe {
-            factory
-                .upload_visible_buffer(
-                    &mut self.buffer,
-                    indirect_offset(index, self.align),
-                    &[DrawIndexedCommand {
-                        index_count: scene.object_mesh.as_ref().unwrap().len(),
-                        instance_count: scene.objects.len() as u32,
-                        first_index: 0,
-                        vertex_offset: 0,
-                        first_instance: 0,
-                    }],
-                )
-                .unwrap()
-        };
-
-        if !scene.objects.is_empty() {
-            unsafe {
-                factory
-                    .upload_visible_buffer(
-                        &mut self.buffer,
-                        models_offset(index, self.align),
-                        &scene.objects[..],
-                    )
-                    .unwrap()
-            };
-        }
 
         PrepareResult::DrawReuse
     }
@@ -337,13 +252,9 @@ where
                 std::iter::empty(),
             );
 
-            #[cfg(feature = "spirv-reflection")]
             let vertex = [SHADER_REFLECTION
-                .attributes(&["position", "color", "normal"])
+                .attributes(&["position", "color"])
                 .unwrap()];
-
-            #[cfg(not(feature = "spirv-reflection"))]
-            let vertex = [PosColorNorm::vertex()];
 
             scene
                 .object_mesh
@@ -352,16 +263,7 @@ where
                 .bind(0, &vertex, &mut encoder)
                 .unwrap();
 
-            encoder.bind_vertex_buffers(
-                1,
-                std::iter::once((self.buffer.raw(), models_offset(index, self.align))),
-            );
-            encoder.draw_indexed_indirect(
-                self.buffer.raw(),
-                indirect_offset(index, self.align),
-                1,
-                INDIRECT_SIZE as u32,
-            );
+            encoder.draw_indexed(0..scene.object_mesh.as_ref().unwrap().len(), 0 as i32, 0..1)
         }
     }
 
@@ -402,7 +304,7 @@ fn main() {
         window_kind,
         1,
         factory.get_surface_format(&surface),
-        Some(hal::command::ClearValue::Color([1.0, 1.0, 1.0, 1.0].into())),
+        Some(hal::command::ClearValue::Color([0.5, 0.5, 1.0, 1.0].into())),
     );
 
     let depth = graph_builder.create_image(
@@ -466,13 +368,18 @@ fn main() {
         .build(&mut factory, &mut families, &scene)
         .unwrap();
 
-    let icosphere = genmesh::generators::IcoSphere::subdivide(4);
-    let indices: Vec<_> = genmesh::Vertices::vertices(icosphere.indexed_polygon_iter())
-        .map(|i| i as u32)
-        .collect();
+    // let icosphere = genmesh::generators::IcoSphere::subdivide(3);
+    let icosphere = genmesh::generators::Cube::new();
+    // icosphere.
+    let indices: Vec<_> =
+        genmesh::Vertices::vertices(icosphere.indexed_polygon_iter().triangulate())
+            .map(|i| i as u32)
+            .collect();
+
+    println!("indices: {}", indices.len());
     let vertices: Vec<_> = icosphere
         .shared_vertex_iter()
-        .map(|v| PosColorNorm {
+        .map(|v| PosColor {
             position: v.pos.into(),
             color: [
                 (v.pos.x + 1.0) / 2.0,
@@ -481,10 +388,10 @@ fn main() {
                 1.0,
             ]
             .into(),
-            normal: v.normal.into(),
+            // normal: v.normal.into(),
         })
         .collect();
-
+    println!("vertices: {}", vertices.len());
     scene.object_mesh = Some(
         Mesh::<Backend>::builder()
             .with_indices(&indices[..])
@@ -500,52 +407,32 @@ fn main() {
     let rxy = Uniform::new(-1.0, 1.0);
     let rz = Uniform::new(0.0, 185.0);
 
-    let mut fpss = Vec::new();
-    let mut checkpoint = started;
-    let mut should_close = false;
-
-    while !should_close && scene.objects.len() < MAX_OBJECTS {
-        let start = frames.start;
-        let from = scene.objects.len();
-        for _ in &mut frames {
-            factory.maintain(&mut families);
-            event_loop.poll_events(|event| match event {
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    ..
-                } => should_close = true,
-                _ => (),
-            });
-            graph.run(&mut factory, &mut families, &scene);
-
-            let elapsed = checkpoint.elapsed();
-
-            if scene.objects.len() < MAX_OBJECTS {
-                scene.objects.push({
-                    let z = rz.sample(&mut rng);
-                    nalgebra::Transform3::identity()
-                        * nalgebra::Translation3::new(
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                            -z,
-                        )
-                })
-            }
-
-            if should_close
-                || elapsed > std::time::Duration::new(5, 0)
-                || scene.objects.len() == MAX_OBJECTS
-            {
-                let frames = frames.start - start;
-                let nanos = elapsed.as_secs() * 1_000_000_000 + elapsed.subsec_nanos() as u64;
-                fpss.push((frames * 1_000_000_000 / nanos, from..scene.objects.len()));
-                checkpoint += elapsed;
-                break;
-            }
-        }
+    for _ in 0..1000 {
+        scene.objects.push({
+            let z = rz.sample(&mut rng);
+            nalgebra::Transform3::identity()
+                * nalgebra::Translation3::new(
+                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
+                    -z,
+                )
+        });
     }
 
-    log::info!("FPS: {:#?}", fpss);
+    let mut checkpoint = started;
+    let mut player_state = player::State::new();
+    let mut event_manager = player::EventManager::new();
+    while !event_manager.should_close() {
+        factory.maintain(&mut families);
+        player_state.apply_events(event_manager.poll_events(&mut event_loop));
+        scene.camera = Camera {
+            proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
+            view: player_state.get_view_matrix(),
+        };
+
+        graph.run(&mut factory, &mut families, &scene);
+        let elapsed = checkpoint.elapsed();
+    }
 
     graph.dispose(&mut factory, &scene);
 }
