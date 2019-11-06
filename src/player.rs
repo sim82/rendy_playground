@@ -193,6 +193,8 @@ impl State {
         if self.input_state.right {
             self.player_model.apply_move_right(FORWARD_VEL * boost);
         }
+
+        println!("pos: {:?}", self.player_model.pos);
     }
     pub fn get_view_matrix(&self) -> Projective3<f32> {
         self.player_model.get_view_matrix()

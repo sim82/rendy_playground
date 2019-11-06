@@ -43,7 +43,7 @@ type Backend = rendy::vulkan::Backend;
 lazy_static::lazy_static! {
     static ref VERTEX: SpirvShader = SourceShaderInfo::new(
         include_str!("shader.vert"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes/shader.vert").into(),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes_simple/shader.vert").into(),
         ShaderKind::Vertex,
         SourceLanguage::GLSL,
         "main",
@@ -51,7 +51,7 @@ lazy_static::lazy_static! {
 
     static ref FRAGMENT: SpirvShader = SourceShaderInfo::new(
         include_str!("shader.frag"),
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes/shader.frag").into(),
+        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/meshes_simple/shader.frag").into(),
         ShaderKind::Fragment,
         SourceLanguage::GLSL,
         "main",
@@ -64,14 +64,6 @@ lazy_static::lazy_static! {
     static ref SHADER_REFLECTION: SpirvReflection = SHADERS.reflect().unwrap();
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C, align(16))]
-struct Light {
-    pos: nalgebra::Vector3<f32>,
-    pad: f32,
-    intencity: f32,
-}
-
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
 struct UniformArgs {
@@ -82,25 +74,21 @@ struct UniformArgs {
 #[derive(Debug)]
 struct Camera {
     view: nalgebra::Projective3<f32>,
-    proj: nalgebra::Perspective3<f32>,
+    // proj: nalgebra::Perspective3<f32>,
+    proj: nalgebra::Matrix4<f32>,
 }
 
 #[derive(Debug)]
 struct Scene<B: hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
-    objects: Vec<nalgebra::Transform3<f32>>,
-    lights: Vec<Light>,
 }
 
-const MAX_LIGHTS: usize = 32;
-const MAX_OBJECTS: usize = 10_000;
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
     ((UNIFORM_SIZE - 1) / align + 1) * align
 }
-
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
 }
@@ -220,14 +208,15 @@ where
         index: usize,
         scene: &Scene<B>,
     ) -> PrepareResult {
-        println!("index: {}", index);
+        // println!("index: {}", index);
         unsafe {
             factory
                 .upload_visible_buffer(
                     &mut self.buffer,
                     uniform_offset(index, self.align),
                     &[UniformArgs {
-                        proj: scene.camera.proj.to_homogeneous(),
+                        // proj: scene.camera.proj.to_homogeneous(),
+                        proj: scene.camera.proj,
                         view: scene.camera.view.to_homogeneous(),
                     }],
                 )
@@ -332,35 +321,20 @@ fn main() {
 
     let mut scene = Scene {
         camera: Camera {
-            proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
+            proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
+                .to_homogeneous(),
             view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
         },
         object_mesh: None,
-        objects: vec![],
-        lights: vec![
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 0.0, 0.0),
-                intencity: 10.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(0.0, 20.0, -20.0),
-                intencity: 140.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(-20.0, 0.0, -60.0),
-                intencity: 100.0,
-            },
-            Light {
-                pad: 0.0,
-                pos: nalgebra::Vector3::new(20.0, -30.0, -100.0),
-                intencity: 160.0,
-            },
-        ],
     };
-
+    println!(
+        "crap: {:?}",
+        nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0).to_homogeneous()
+    );
+    println!(
+        "good: {:?}",
+        rendy_playground::math::perspective_projection(aspect as f32, 3.1415 / 4.0, 1.0, 200.0,)
+    );
     log::info!("{:#?}", scene);
 
     let mut graph = graph_builder
@@ -369,7 +343,8 @@ fn main() {
         .unwrap();
 
     // let icosphere = genmesh::generators::IcoSphere::subdivide(3);
-    let icosphere = genmesh::generators::Cube::new();
+    // let icosphere = genmesh::generators::Torus::new(1f32, 0.5f32, 32, 32);
+    let icosphere = genmesh::generators::Plane::new();
     // icosphere.
     let indices: Vec<_> =
         genmesh::Vertices::vertices(icosphere.indexed_polygon_iter().triangulate())
@@ -392,6 +367,9 @@ fn main() {
         })
         .collect();
     println!("vertices: {}", vertices.len());
+    for v in &vertices {
+        println!("vert: {:?}", v.position);
+    }
     scene.object_mesh = Some(
         Mesh::<Backend>::builder()
             .with_indices(&indices[..])
@@ -404,20 +382,8 @@ fn main() {
 
     let mut frames = 0u64..;
     let mut rng = rand::thread_rng();
-    let rxy = Uniform::new(-1.0, 1.0);
-    let rz = Uniform::new(0.0, 185.0);
-
-    for _ in 0..1000 {
-        scene.objects.push({
-            let z = rz.sample(&mut rng);
-            nalgebra::Transform3::identity()
-                * nalgebra::Translation3::new(
-                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                    rxy.sample(&mut rng) * (z / 2.0 + 4.0),
-                    -z,
-                )
-        });
-    }
+    // let rxy = Uniform::new(-1.0, 1.0);
+    // let rz = Uniform::new(0.0, 185.0);
 
     let mut checkpoint = started;
     let mut player_state = player::State::new();
@@ -426,7 +392,13 @@ fn main() {
         factory.maintain(&mut families);
         player_state.apply_events(event_manager.poll_events(&mut event_loop));
         scene.camera = Camera {
-            proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
+            // proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
+            proj: rendy_playground::math::perspective_projection(
+                aspect as f32,
+                3.1415 / 4.0,
+                1.0,
+                200.0,
+            ),
             view: player_state.get_view_matrix(),
         };
 

@@ -11,17 +11,17 @@ x11 = []
 spirv-reflection = []
 
 [dependencies]
-rendy = { version ="*", features = ["vulkan"]}
-rendy-texture = { version="*", features = ["image"]}
+rendy = { version ="0.4", features = ["vulkan"]}
+rendy-texture = { version="0.4", features = ["image"]}
 failure = "0.1"
-gfx-backend-vulkan = {features = ["x11"]}
+gfx-backend-vulkan = {version = "0.3", features = ["x11"]}
 # gfx-hal = {version = "0.3"}
 lazy_static = "*"
 log = "*"
 env_logger = "*"
 #failure = "*"
-rendy-wsi = "*"
-rendy-shader = "*"
+rendy-wsi = "0.4"
+rendy-shader = "0.4"
 rand = "0.6"
 palette = "*"
 genmesh = "*"
