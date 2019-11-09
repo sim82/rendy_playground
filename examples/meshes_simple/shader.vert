@@ -11,6 +11,7 @@ layout(location = 2) in vec3 translate;
 layout(set = 0, binding = 0) uniform Args {
     mat4 proj;
     mat4 view;
+    mat4 model;
 };
 
 layout(location = 0) out vec4 frag_pos;
@@ -21,6 +22,9 @@ void main() {
     // mat4 model_mat = mat4(model[0], model[1], model[2], model[3]);
     frag_color = color;
     // frag_norm = normalize((vec4(normal, 1.0)).xyz);
-    frag_pos = vec4(position + translate, 1.0);
-    gl_Position = proj * view * frag_pos;
+    mat4 trans_mat = mat4(1.0);
+    trans_mat[3] = vec3(translate, 1.0);
+    model = model * trans_mat;
+    frag_pos = vec4(position, 1.0);
+    gl_Position = proj * view * model * frag_pos;
 }

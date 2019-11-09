@@ -69,13 +69,12 @@ lazy_static::lazy_static! {
 struct UniformArgs {
     proj: nalgebra::Matrix4<f32>,
     view: nalgebra::Matrix4<f32>,
+    model: nalgebra::Matrix4<f32>,
 }
 
 #[derive(Clone, Copy)]
 #[repr(C, align(16))]
-struct PerInstance {
-    translate: nalgebra::Vector3<f32>,
-}
+struct PerInstance(nalgebra::Vector3<f32>);
 
 #[derive(Debug)]
 struct Camera {
@@ -88,17 +87,21 @@ struct Camera {
 struct Scene<B: hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
+    per_instance: Vec<nalgebra::Vector3<f32>>,
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 const NUM_INSTANCES: u64 = 64;
-const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
+const PER_INSTANCE_SIZE: u64 = size_of::<nalgebra::Vector3<f32>>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
     ((UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES - 1) / align + 1) * align
 }
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
+}
+const fn per_instance_offset(index: usize, align: u64) -> u64 {
+    uniform_offset(index, align) + UNIFORM_SIZE
 }
 
 #[derive(Debug, Default)]
@@ -208,6 +211,14 @@ where
     }
 }
 
+fn model_transform() -> nalgebra::Matrix4<f32> {
+    nalgebra::Rotation3::face_towards(
+        &nalgebra::Vector3::new(1.0, 0.0, 0.0),
+        &nalgebra::Vector3::new(0.0, 1.0, 0.0),
+    )
+    .into()
+}
+
 impl<B> SimpleGraphicsPipeline<B, Scene<B>> for MeshRenderPipeline<B>
 where
     B: hal::Backend,
@@ -232,10 +243,23 @@ where
                         // proj: scene.camera.proj.to_homogeneous(),
                         proj: scene.camera.proj,
                         view: scene.camera.view.to_homogeneous(),
+                        model: model_transform(),
                     }],
                 )
                 .unwrap()
         };
+
+        if !scene.per_instance.is_empty() {
+            unsafe {
+                factory
+                    .upload_visible_buffer(
+                        &mut self.buffer,
+                        per_instance_offset(index, self.align),
+                        &scene.per_instance[..],
+                    )
+                    .unwrap()
+            };
+        }
 
         PrepareResult::DrawReuse
     }
@@ -265,8 +289,15 @@ where
                 .unwrap()
                 .bind(0, &vertex, &mut encoder)
                 .unwrap();
-
-            encoder.draw_indexed(0..scene.object_mesh.as_ref().unwrap().len(), 0 as i32, 0..1)
+            encoder.bind_vertex_buffers(
+                1,
+                std::iter::once((self.buffer.raw(), per_instance_offset(index, self.align))),
+            );
+            encoder.draw_indexed(
+                0..scene.object_mesh.as_ref().unwrap().len(),
+                0 as i32,
+                0..scene.per_instance.len() as u32,
+            )
         }
     }
 
@@ -340,7 +371,14 @@ fn main() {
             view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
         },
         object_mesh: None,
+        per_instance: vec![],
     };
+    for i in 0..NUM_INSTANCES {
+        scene
+            .per_instance
+            .push(nalgebra::Vector3::new(i as f32, 0.0, 0.0));
+    }
+
     println!(
         "crap: {:?}",
         nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0).to_homogeneous()
