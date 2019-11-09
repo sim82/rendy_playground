@@ -11,32 +11,30 @@ x11 = []
 spirv-reflection = []
 
 [dependencies]
-rendy = { version ="0.4", features = ["vulkan"]}
-rendy-texture = { version="0.4", features = ["image"]}
+bincode = "*"
+clap = "*"
+env_logger = "*"
 failure = "0.1"
-gfx-backend-vulkan = {version = "0.3", features = ["x11"]}
-# gfx-hal = {version = "0.3"}
+genmesh = "*"
+gfx-backend-vulkan = {version = "0.4", features = ["x11"]}
+image = "*"
+itertools = "*"
 lazy_static = "*"
 log = "*"
-env_logger = "*"
-#failure = "*"
-rendy-wsi = "0.4"
-rendy-shader = "0.4"
-rand = "0.6"
-palette = "*"
-genmesh = "*"
 nalgebra = "*"
-# nalgebra-glm = "*"
-image = "*"
-winit = "*"
+ndarray = "*"
 num-traits = "*"
-clap = "*"
+packed_simd = "*"
+palette = "*"
+rand = "0.6"
+random_color = "*"
 rayon = "*"
+rendy = { version ="0.5", features = ["vulkan"]}
+rendy-shader = "0.5"
+rendy-texture = { version="0.5", features = ["image"]}
+rendy-wsi = "0.5"
 serde = "*"
 serde_derive = "*"
 serde_json = "*"
-ndarray = "*"
-packed_simd = "*"
-itertools = "*"
-bincode = "*"
-random_color = "*"
+winit = "*"
+
