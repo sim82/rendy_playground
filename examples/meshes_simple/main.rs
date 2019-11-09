@@ -12,6 +12,7 @@ use {
         Triangulate,
     },
     rand::distributions::{Distribution, Uniform},
+    random_color::RandomColor,
     rendy::{
         command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
         factory::{Config, Factory},
@@ -20,7 +21,7 @@ use {
         },
         hal::{self, Device as _, PhysicalDevice as _},
         memory::Dynamic,
-        mesh::{Mesh, Model, PosColor},
+        mesh::{Mesh, Model, Position},
         resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
         shader::{ShaderKind, SourceLanguage, SourceShaderInfo, SpirvShader},
         wsi::winit::{Event, EventsLoop, WindowBuilder, WindowEvent},
@@ -72,9 +73,9 @@ struct UniformArgs {
     model: nalgebra::Matrix4<f32>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
-struct PerInstance(nalgebra::Vector3<f32>);
+struct PerInstance(nalgebra::Vector4<f32>, nalgebra::Vector4<f32>);
 
 #[derive(Debug)]
 struct Camera {
@@ -87,12 +88,12 @@ struct Camera {
 struct Scene<B: hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
-    per_instance: Vec<nalgebra::Vector3<f32>>,
+    per_instance: Vec<PerInstance>,
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 const NUM_INSTANCES: u64 = 64;
-const PER_INSTANCE_SIZE: u64 = size_of::<nalgebra::Vector3<f32>>() as u64;
+const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
     ((UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES - 1) / align + 1) * align
@@ -137,11 +138,11 @@ where
     )> {
         return vec![
             SHADER_REFLECTION
-                .attributes(&["position", "color"])
+                .attributes(&["position"])
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             SHADER_REFLECTION
-                .attributes(&["translate"])
+                .attributes(&["color", "translate"])
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
@@ -212,11 +213,21 @@ where
 }
 
 fn model_transform() -> nalgebra::Matrix4<f32> {
-    nalgebra::Rotation3::face_towards(
-        &nalgebra::Vector3::new(1.0, 0.0, 0.0),
-        &nalgebra::Vector3::new(0.0, 1.0, 0.0),
-    )
-    .into()
+    // nalgebra::Rotation3::face_towards(
+    //     &nalgebra::Vector3::new(1.0, 0.0, 0.0),
+    //     &nalgebra::Vector3::new(0.0, 1.0, 0.0),
+    // )
+    // .into()
+
+    // let rot = nalgebra::Rotation3::face_towards(
+    //     &nalgebra::Vector3::new(1.0, 0.0, 0.0),
+    //     &nalgebra::Vector3::new(0.0, 1.0, 0.0),
+    // );
+
+    let rot = nalgebra::UnitQuaternion::identity();
+
+    // let trans = nalgebra::Translation3::from_vector(nalgebra::Vector3::new(0.5, 0.5, 0.0));
+    nalgebra::Similarity3::from_parts(nalgebra::Vector3::new(0.5, 0.5, 0.0).into(), rot, 0.5).into()
 }
 
 impl<B> SimpleGraphicsPipeline<B, Scene<B>> for MeshRenderPipeline<B>
@@ -279,9 +290,7 @@ where
                 std::iter::empty(),
             );
 
-            let vertex = [SHADER_REFLECTION
-                .attributes(&["position", "color"])
-                .unwrap()];
+            let vertex = [SHADER_REFLECTION.attributes(&["position"]).unwrap()];
 
             scene
                 .object_mesh
@@ -373,10 +382,22 @@ fn main() {
         object_mesh: None,
         per_instance: vec![],
     };
+    // let mut rng = rand::thread_rng();
+    // let col_dist = Uniform::new(0.5, 1.0);
+
+    let mut rc = RandomColor::new();
+    rc.luminosity(random_color::Luminosity::Bright);
     for i in 0..NUM_INSTANCES {
-        scene
-            .per_instance
-            .push(nalgebra::Vector3::new(i as f32, 0.0, 0.0));
+        let color = rc.to_rgb_array();
+        scene.per_instance.push(PerInstance(
+            nalgebra::Vector4::new(
+                color[0] as f32 / 255.0,
+                color[1] as f32 / 255.0,
+                color[2] as f32 / 255.0,
+                1.0,
+            ),
+            nalgebra::Vector4::new(i as f32, 0.0, 0.0, 1.0),
+        ));
     }
 
     println!(
@@ -406,21 +427,11 @@ fn main() {
     println!("indices: {}", indices.len());
     let vertices: Vec<_> = icosphere
         .shared_vertex_iter()
-        .map(|v| PosColor {
-            position: v.pos.into(),
-            color: [
-                (v.pos.x + 1.0) / 2.0,
-                (v.pos.y + 1.0) / 2.0,
-                (v.pos.z + 1.0) / 2.0,
-                1.0,
-            ]
-            .into(),
-            // normal: v.normal.into(),
-        })
+        .map(|v| Position(v.pos.into()))
         .collect();
     println!("vertices: {}", vertices.len());
     for v in &vertices {
-        println!("vert: {:?}", v.position);
+        println!("vert: {:?}", v);
     }
     scene.object_mesh = Some(
         Mesh::<Backend>::builder()
@@ -433,7 +444,6 @@ fn main() {
     let started = time::Instant::now();
 
     let mut frames = 0u64..;
-    let mut rng = rand::thread_rng();
     // let rxy = Uniform::new(-1.0, 1.0);
     // let rz = Uniform::new(0.0, 185.0);
 
@@ -456,6 +466,16 @@ fn main() {
 
         graph.run(&mut factory, &mut families, &scene);
         let elapsed = checkpoint.elapsed();
+
+        for pi in &mut scene.per_instance {
+            let color = rc.to_rgb_array();
+            pi.0 = nalgebra::Vector4::new(
+                color[0] as f32 / 255.0,
+                color[1] as f32 / 255.0,
+                color[2] as f32 / 255.0,
+                1.0,
+            );
+        }
     }
 
     graph.dispose(&mut factory, &scene);

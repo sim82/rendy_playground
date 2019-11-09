@@ -39,4 +39,4 @@ ndarray = "*"
 packed_simd = "*"
 itertools = "*"
 bincode = "*"
-
+random_color = "*"
