@@ -71,6 +71,12 @@ struct UniformArgs {
     view: nalgebra::Matrix4<f32>,
 }
 
+#[derive(Clone, Copy)]
+#[repr(C, align(16))]
+struct PerInstance {
+    translate: nalgebra::Vector3<f32>,
+}
+
 #[derive(Debug)]
 struct Camera {
     view: nalgebra::Projective3<f32>,
@@ -85,9 +91,11 @@ struct Scene<B: hal::Backend> {
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
+const NUM_INSTANCES: u64 = 64;
+const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE - 1) / align + 1) * align
+    ((UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES - 1) / align + 1) * align
 }
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
@@ -124,10 +132,16 @@ where
         hal::pso::ElemStride,
         hal::pso::VertexInputRate,
     )> {
-        return vec![SHADER_REFLECTION
-            .attributes(&["position", "color"])
-            .unwrap()
-            .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex)];
+        return vec![
+            SHADER_REFLECTION
+                .attributes(&["position", "color"])
+                .unwrap()
+                .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
+            SHADER_REFLECTION
+                .attributes(&["translate"])
+                .unwrap()
+                .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
+        ];
     }
 
     fn layout(&self) -> Layout {
