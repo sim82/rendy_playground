@@ -7,7 +7,15 @@
     allow(unused)
 )]
 
+// #[cfg(feature = "dx12")]
+// use gfx_backend_dx12::Backend;
+
+// #[cfg(feature = "metal")]
+// use gfx_backend_metal::Backend;
+
+// #[cfg(feature = "vulkan")]
 use gfx_backend_vulkan::Backend;
+use rand::prelude::*;
 use rendy::shader::SpirvReflection;
 use rendy_playground::crystal;
 use {
@@ -35,15 +43,6 @@ use {
     genmesh::Triangulate, nalgebra::Vector3, random_color::RandomColor, rendy::mesh::Position,
     rendy_playground::player,
 };
-
-// #[cfg(feature = "dx12")]
-// type Backend = rendy::dx12::Backend;
-
-// #[cfg(feature = "metal")]
-// type Backend = rendy::metal::Backend;
-
-// #[cfg(feature = "vulkan")]
-// type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
     static ref VERTEX: SpirvShader = SourceShaderInfo::new(
@@ -79,20 +78,17 @@ struct UniformArgs {
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
-struct PerInstance {
+struct PerInstanceConst {
     translate: nalgebra::Vector3<f32>,
     dir: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(C, align(16))]
+struct PerInstance {
     color: nalgebra::Vector3<f32>,
     pad: u32,
 }
-
-// #[derive(Clone, Copy, Debug)]
-// #[repr(C, align(16))]
-// struct PerInstanceDyn {
-//     translate: nalgebra::Vector4<f32>,
-//     color: nalgebra::Vector3<f32>,
-//     dir: u32,
-// }
 
 #[derive(Debug)]
 struct Camera {
@@ -101,26 +97,33 @@ struct Camera {
     proj: nalgebra::Matrix4<f32>,
 }
 
-#[derive(Debug)]
 struct Scene<B: hal::Backend> {
     camera: Camera,
     object_mesh: Option<Mesh<B>>,
+    per_instance_const: Vec<PerInstanceConst>,
     per_instance: Vec<PerInstance>,
+    rad_scene: crystal::rad::Scene,
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 const NUM_INSTANCES: u64 = 1024 * 1024;
+const PER_INSTANCE_CONST_SIZE: u64 = size_of::<PerInstanceConst>() as u64;
 const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
 
 const fn align_to(s: u64, align: u64) -> u64 {
     ((s - 1) / align + 1) * align
 }
-
+const fn buffer_const_size(align: u64) -> u64 {
+    align_to(PER_INSTANCE_CONST_SIZE * NUM_INSTANCES, align)
+}
 const fn buffer_frame_size(align: u64) -> u64 {
     align_to(UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES, align)
 }
+const fn buffer_size(align: u64, frames: u64) -> u64 {
+    buffer_const_size(align) + buffer_frame_size(align) * frames
+}
 const fn uniform_offset(index: usize, align: u64) -> u64 {
-    buffer_frame_size(align) * index as u64
+    buffer_const_size(align) + buffer_frame_size(align) * index as u64
 }
 const fn per_instance_offset(index: usize, align: u64) -> u64 {
     uniform_offset(index, align) + UNIFORM_SIZE
@@ -163,7 +166,11 @@ where
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             SHADER_REFLECTION
-                .attributes(&["translate", "dir", "color", "pad"])
+                .attributes(&["translate", "dir"])
+                .unwrap()
+                .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
+            SHADER_REFLECTION
+                .attributes(&["color", "pad"])
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
@@ -178,7 +185,7 @@ where
         ctx: &GraphContext<B>,
         factory: &mut Factory<B>,
         _queue: QueueId,
-        _scene: &Scene<B>,
+        scene: &Scene<B>,
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
         set_layouts: &[Handle<DescriptorSetLayout<B>>],
@@ -193,10 +200,10 @@ where
             .limits()
             .min_uniform_buffer_offset_alignment;
 
-        let buffer = factory
+        let mut buffer = factory
             .create_buffer(
                 BufferInfo {
-                    size: buffer_frame_size(align) * frames as u64,
+                    size: buffer_size(align, frames) as u64,
                     usage: hal::buffer::Usage::UNIFORM
                         | hal::buffer::Usage::INDIRECT
                         | hal::buffer::Usage::VERTEX,
@@ -217,12 +224,24 @@ where
                     array_offset: 0,
                     descriptors: Some(hal::pso::Descriptor::Buffer(
                         buffer.raw(),
-                        Some(uniform_offset(index, align))
-                            ..Some(uniform_offset(index, align) + UNIFORM_SIZE),
+                        Some(uniform_offset(index as usize, align))
+                            ..Some(uniform_offset(index as usize, align) + UNIFORM_SIZE),
                     )),
                 }));
                 sets.push(set);
             }
+        }
+
+        if !scene.per_instance_const.is_empty() {
+            // println!(
+            //     "upload const: {}",
+            //     std::mem::size_of::<PerInstanceConst>() * scene.per_instance_const.len()
+            // );
+            unsafe {
+                factory
+                    .upload_visible_buffer(&mut buffer, 0, &scene.per_instance_const[..])
+                    .expect("update const buffer failed")
+            };
         }
 
         Ok(MeshRenderPipeline {
@@ -285,6 +304,12 @@ where
         scene: &Scene<B>,
     ) -> PrepareResult {
         // println!("index: {}", index);
+
+        // println!(
+        //     "upload uniform {}: {}",
+        //     index,
+        //     std::mem::size_of::<UniformArgs>()
+        // );
         unsafe {
             factory
                 .upload_visible_buffer(
@@ -299,7 +324,15 @@ where
                 )
                 .unwrap()
         };
-
+        {
+            let per_instance = &scene.per_instance[..];
+            // println!(
+            //     "upload dyn {}: {}",
+            //     index,
+            //     // std::mem::size_of::<PerInstance>() * scene.per_instance.len(),
+            //     std::mem::size_of_val(per_instance)
+            // );
+        }
         if !scene.per_instance.is_empty() {
             unsafe {
                 factory
@@ -338,8 +371,9 @@ where
                 .unwrap()
                 .bind(0, &vertex, &mut encoder)
                 .unwrap();
+            encoder.bind_vertex_buffers(1, std::iter::once((self.buffer.raw(), 0)));
             encoder.bind_vertex_buffers(
-                1,
+                2,
                 std::iter::once((self.buffer.raw(), per_instance_offset(index, self.align))),
             );
             encoder.draw_indexed(
@@ -402,7 +436,7 @@ fn main() {
                     },
                     Some(hal::command::ClearValue {
                         color: hal::command::ClearColor {
-                            float32: [1.0, 1.0, 1.0, 1.0],
+                            float32: [0.5, 0.5, 1.0, 1.0],
                         },
                     }),
                 ),
@@ -412,6 +446,8 @@ fn main() {
 
         let mut planes = crystal::PlanesSep::new();
         planes.create_planes(&bm);
+        let planes_copy : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
+
         let mut scene = Scene {
             camera: Camera {
                 proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
@@ -420,18 +456,20 @@ fn main() {
             },
             object_mesh: None,
             per_instance: vec![],
+            per_instance_const: vec![],
+            rad_scene: crystal::rad::Scene::new(planes, bm),
         };
+
         // let mut rng = rand::thread_rng();
         // let col_dist = Uniform::new(0.5, 1.0);
 
         let mut rc = RandomColor::new();
         rc.luminosity(random_color::Luminosity::Bright);
-        let planes : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
-        println!("planes: {}", planes.len());
-        for i in 0..std::cmp::min(NUM_INSTANCES as usize,planes.len()) {
+        println!("planes: {}", planes_copy.len());
+        for i in 0..std::cmp::min(NUM_INSTANCES as usize,planes_copy.len()) {
             let color = rc.to_rgb_array();
-            let point = planes[i].cell;
-            let dir = match planes[i].dir {
+            let point = planes_copy[i].cell;
+            let dir = match planes_copy[i].dir {
                 crystal::Dir::ZxPos => 4,
                 crystal::Dir::ZxNeg => 5,
                 crystal::Dir::YzPos => 2,
@@ -439,11 +477,11 @@ fn main() {
                 crystal::Dir::XyPos => 0,
                 crystal::Dir::XyNeg => 1,
             };
-            scene.per_instance.push(PerInstance{
-                // translate:
-                // nalgebra::Vector4::new((i / 6 * 6) as f32, 0.0, 0.0, 1.0),
+            scene.per_instance_const.push(PerInstanceConst{
                 translate: nalgebra::Vector3::new(point[0] as f32, point[1] as f32, point[2] as f32),
                 dir : dir,
+            });
+            scene.per_instance.push(PerInstance{
                 color : nalgebra::Vector3::new(
                     color[0] as f32 / 255.0,
                     color[1] as f32 / 255.0,
@@ -522,16 +560,43 @@ fn main() {
                     if let Some(ref mut graph) = graph {
                         graph.run(&mut factory, &mut families, &scene);
                     }
-                    let elapsed = checkpoint.elapsed();
 
-                    for pi in &mut scene.per_instance {
-                        let color = rc.to_rgb_array();
-                        pi.color = nalgebra::Vector3::new(
-                            color[0] as f32 / 255.0,
-                            color[1] as f32 / 255.0,
-                            color[2] as f32 / 255.0,
-                        );
+                    let elapsed = checkpoint.elapsed();
+                    if (checkpoint.elapsed() >= std::time::Duration::from_secs(5))
+                    {
+                        checkpoint = time::Instant::now();
+                        let mut rng = thread_rng();
+                        let scene = &mut scene.rad_scene;
+                        for i in 0..scene.planes.num_planes() {
+                            // seriously, there is no Vec.fill?
+                            scene.diffuse[i] = Vector3::new(1f32, 1f32, 1f32);
+                            scene.emit[i] = Vector3::new(0.0, 0.0, 0.0);
+                        }
+                        let mut rc = RandomColor::new();
+                        rc.luminosity(random_color::Luminosity::Bright);
+                        let num_dots = 1000;
+                        for _ in 0..num_dots {
+                            let i = rng.gen_range(0, scene.planes.num_planes());
+                            let color = rc.to_rgb_array();
+                            scene.emit[i] = Vector3::new(color[0] as f32 / 255.0, color[1] as f32 / 255.0,color[2] as f32 / 255.0,);
+                        }
                     }
+                    scene.rad_scene.do_rad();
+                    for i in 0..scene.rad_scene.planes.num_planes() {
+                        scene.per_instance[i].color[0] = scene.rad_scene.rad_front.r[i];
+                        scene.per_instance[i].color[1] = scene.rad_scene.rad_front.g[i];
+                        scene.per_instance[i].color[2] = scene.rad_scene.rad_front.b[i];
+                    }
+
+
+                    // for pi in &mut scene.per_instance {
+                    //     let color = rc.to_rgb_array();
+                    //     pi.color = nalgebra::Vector3::new(
+                    //         color[0] as f32 / 255.0,
+                    //         color[1] as f32 / 255.0,
+                    //         color[2] as f32 / 255.0,
+                    //     );
+                    // }
                 }
                 _ => {}
             }
