@@ -112,8 +112,12 @@ const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
 const NUM_INSTANCES: u64 = 1024 * 1024;
 const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
 
+const fn align_to(s: u64, align: u64) -> u64 {
+    ((s - 1) / align + 1) * align
+}
+
 const fn buffer_frame_size(align: u64) -> u64 {
-    ((UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES - 1) / align + 1) * align
+    align_to(UNIFORM_SIZE + PER_INSTANCE_SIZE * NUM_INSTANCES, align)
 }
 const fn uniform_offset(index: usize, align: u64) -> u64 {
     buffer_frame_size(align) * index as u64
