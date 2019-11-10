@@ -33,8 +33,10 @@ rendy = { version ="0.5", features = ["vulkan"]}
 rendy-shader = "0.5"
 rendy-texture = { version="0.5", features = ["image"]}
 rendy-wsi = "0.5"
+rendy-init = { version = "0.5", features = ["winit"]}
+rendy-core = { version = "*", features = ["vulkan"]}
 serde = "*"
 serde_derive = "*"
 serde_json = "*"
-winit = "*"
+winit = "0.20.0-alpha4"
 

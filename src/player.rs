@@ -3,11 +3,11 @@ use nalgebra::{
     Isometry3, Point3, Projective3, RealField, Rotation3, Translation3, UnitQuaternion, Vector3,
     Vector4,
 };
-use winit::{Event, EventsLoop, WindowEvent};
+use winit::event::{ElementState, Event, KeyboardInput, VirtualKeyCode, WindowEvent};
 
 #[derive(Copy, Clone)]
 pub enum InputEvent {
-    Key(winit::VirtualKeyCode, winit::ElementState),
+    Key(VirtualKeyCode, ElementState),
     KeyFocus(bool),
     Character(char),
     PointerDelta(f32, f32),
@@ -72,22 +72,20 @@ impl InputState {
     pub fn apply(&mut self, ev: InputEvent) {
         match ev {
             InputEvent::Key(keycode, state) => {
-                let down = state == winit::ElementState::Pressed;
+                let down = state == ElementState::Pressed;
 
                 match keycode {
-                    winit::VirtualKeyCode::W => self.forward = down,
-                    winit::VirtualKeyCode::S => self.backward = down,
-                    winit::VirtualKeyCode::A => self.left = down,
-                    winit::VirtualKeyCode::D => self.right = down,
-                    winit::VirtualKeyCode::I => self.z_neg = down,
-                    winit::VirtualKeyCode::K => self.z_pos = down,
-                    winit::VirtualKeyCode::J => self.x_neg = down,
-                    winit::VirtualKeyCode::L => self.x_pos = down,
-                    winit::VirtualKeyCode::Q => self.action1 = down,
-                    winit::VirtualKeyCode::E => self.action2 = down,
-                    winit::VirtualKeyCode::LShift | winit::VirtualKeyCode::RShift => {
-                        self.run = down
-                    }
+                    VirtualKeyCode::W => self.forward = down,
+                    VirtualKeyCode::S => self.backward = down,
+                    VirtualKeyCode::A => self.left = down,
+                    VirtualKeyCode::D => self.right = down,
+                    VirtualKeyCode::I => self.z_neg = down,
+                    VirtualKeyCode::K => self.z_pos = down,
+                    VirtualKeyCode::J => self.x_neg = down,
+                    VirtualKeyCode::L => self.x_pos = down,
+                    VirtualKeyCode::Q => self.action1 = down,
+                    VirtualKeyCode::E => self.action2 = down,
+                    VirtualKeyCode::LShift | VirtualKeyCode::RShift => self.run = down,
                     _ => {}
                 }
             }
@@ -194,7 +192,7 @@ impl State {
             self.player_model.apply_move_right(FORWARD_VEL * boost);
         }
 
-        println!("pos: {:?}", self.player_model.pos);
+        // println!("pos: {:?}", self.player_model.pos);
     }
     pub fn get_view_matrix(&self) -> Projective3<f32> {
         self.player_model.get_view_matrix()
@@ -204,6 +202,7 @@ impl State {
 pub struct EventManager /*LOL*/ {
     old_pos: Option<winit::dpi::LogicalPosition>,
     should_close: bool,
+    input_events: Vec<InputEvent>,
 }
 
 impl EventManager {
@@ -211,43 +210,33 @@ impl EventManager {
         EventManager {
             old_pos: None,
             should_close: false,
+            input_events: vec![],
         }
     }
     pub fn should_close(&self) -> bool {
         self.should_close
     }
-    pub fn poll_events(&mut self, event_loop: &mut EventsLoop) -> Vec<InputEvent> {
-        let mut events = Vec::new();
-        event_loop.poll_events(|event| match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => self.should_close = true,
-            winit::Event::WindowEvent {
-                event:
-                    winit::WindowEvent::KeyboardInput {
-                        input:
-                            winit::KeyboardInput {
-                                state,
-                                virtual_keycode: Some(keycode),
-                                ..
-                            },
+    pub fn window_event(&mut self, event: WindowEvent) {
+        match event {
+            WindowEvent::CloseRequested => self.should_close = true,
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        state,
+                        virtual_keycode: Some(keycode),
                         ..
                     },
                 ..
             } => {
-                events.push(InputEvent::Key(keycode, state));
+                self.input_events.push(InputEvent::Key(keycode, state));
                 match keycode {
-                    winit::VirtualKeyCode::F3 => self.should_close = true,
+                    VirtualKeyCode::F3 => self.should_close = true,
                     _ => {}
                 }
             }
-            winit::Event::WindowEvent {
-                event: winit::WindowEvent::CursorMoved { position: pos, .. },
-                ..
-            } => {
+            WindowEvent::CursorMoved { position: pos, .. } => {
                 if let Some(op) = self.old_pos {
-                    events.push(InputEvent::PointerDelta(
+                    self.input_events.push(InputEvent::PointerDelta(
                         (pos.x - op.x) as f32,
                         (pos.y - op.y) as f32,
                     ));
@@ -256,7 +245,9 @@ impl EventManager {
                 self.old_pos = Some(pos);
             }
             _ => (),
-        });
-        events
+        }
+    }
+    pub fn input_events(&mut self) -> Vec<InputEvent> {
+        self.input_events.split_off(0)
     }
 }

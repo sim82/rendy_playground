@@ -6,40 +6,44 @@
     not(any(feature = "dx12", feature = "metal", feature = "vulkan")),
     allow(unused)
 )]
+
+use gfx_backend_vulkan::Backend;
+use rendy::shader::SpirvReflection;
+use rendy_playground::crystal;
 use {
-    genmesh::{
-        generators::{IndexedPolygon, SharedVertex},
-        Triangulate,
-    },
+    genmesh::generators::{IndexedPolygon, SharedVertex},
     rand::distributions::{Distribution, Uniform},
-    random_color::RandomColor,
     rendy::{
         command::{DrawIndexedCommand, QueueId, RenderPassEncoder},
         factory::{Config, Factory},
-        graph::{
-            present::PresentNode, render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage,
+        graph::{render::*, GraphBuilder, GraphContext, NodeBuffer, NodeImage},
+        hal::{self, adapter::PhysicalDevice as _, device::Device as _},
+        init::winit::{
+            event::{Event, WindowEvent},
+            event_loop::{ControlFlow, EventLoop},
+            window::WindowBuilder,
         },
-        hal::{self, Device as _, PhysicalDevice as _},
+        init::AnyWindowedRendy,
         memory::Dynamic,
-        mesh::{Mesh, Model, Position},
+        mesh::{Mesh, Model, PosColorNorm},
         resource::{Buffer, BufferInfo, DescriptorSet, DescriptorSetLayout, Escape, Handle},
         shader::{ShaderKind, SourceLanguage, SourceShaderInfo, SpirvShader},
-        wsi::winit::{Event, EventsLoop, WindowBuilder, WindowEvent},
     },
-    rendy_playground::player,
     std::{cmp::min, mem::size_of, time},
 };
+use {
+    genmesh::Triangulate, nalgebra::Vector3, random_color::RandomColor, rendy::mesh::Position,
+    rendy_playground::player,
+};
 
-use rendy::shader::SpirvReflection;
+// #[cfg(feature = "dx12")]
+// type Backend = rendy::dx12::Backend;
 
-#[cfg(feature = "dx12")]
-type Backend = rendy::dx12::Backend;
+// #[cfg(feature = "metal")]
+// type Backend = rendy::metal::Backend;
 
-#[cfg(feature = "metal")]
-type Backend = rendy::metal::Backend;
-
-#[cfg(feature = "vulkan")]
-type Backend = rendy::vulkan::Backend;
+// #[cfg(feature = "vulkan")]
+// type Backend = rendy::vulkan::Backend;
 
 lazy_static::lazy_static! {
     static ref VERTEX: SpirvShader = SourceShaderInfo::new(
@@ -70,12 +74,16 @@ lazy_static::lazy_static! {
 struct UniformArgs {
     proj: nalgebra::Matrix4<f32>,
     view: nalgebra::Matrix4<f32>,
-    model: nalgebra::Matrix4<f32>,
+    model: [nalgebra::Matrix4<f32>; 6],
 }
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
-struct PerInstance(nalgebra::Vector4<f32>, nalgebra::Vector4<f32>);
+struct PerInstance {
+    translate: nalgebra::Vector4<f32>,
+    color: nalgebra::Vector3<f32>,
+    dir: u32,
+}
 
 #[derive(Debug)]
 struct Camera {
@@ -92,7 +100,7 @@ struct Scene<B: hal::Backend> {
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
-const NUM_INSTANCES: u64 = 64;
+const NUM_INSTANCES: u64 = 1024 * 1024;
 const PER_INSTANCE_SIZE: u64 = size_of::<PerInstance>() as u64;
 
 const fn buffer_frame_size(align: u64) -> u64 {
@@ -142,7 +150,7 @@ where
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             SHADER_REFLECTION
-                .attributes(&["color", "translate"])
+                .attributes(&["color", "translate", "dir"])
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
@@ -161,7 +169,7 @@ where
         buffers: Vec<NodeBuffer>,
         images: Vec<NodeImage>,
         set_layouts: &[Handle<DescriptorSetLayout<B>>],
-    ) -> Result<MeshRenderPipeline<B>, failure::Error> {
+    ) -> Result<MeshRenderPipeline<B>, rendy_core::hal::pso::CreationError> {
         assert!(buffers.is_empty());
         assert!(images.is_empty());
         assert_eq!(set_layouts.len(), 1);
@@ -213,21 +221,40 @@ where
 }
 
 fn model_transform() -> nalgebra::Matrix4<f32> {
-    // nalgebra::Rotation3::face_towards(
-    //     &nalgebra::Vector3::new(1.0, 0.0, 0.0),
-    //     &nalgebra::Vector3::new(0.0, 1.0, 0.0),
-    // )
-    // .into()
-
-    // let rot = nalgebra::Rotation3::face_towards(
-    //     &nalgebra::Vector3::new(1.0, 0.0, 0.0),
-    //     &nalgebra::Vector3::new(0.0, 1.0, 0.0),
-    // );
-
     let rot = nalgebra::UnitQuaternion::identity();
+    nalgebra::Similarity3::from_parts(Vector3::new(0.5, 0.5, 0.0).into(), rot, 0.5).into()
+}
 
-    // let trans = nalgebra::Translation3::from_vector(nalgebra::Vector3::new(0.5, 0.5, 0.0));
-    nalgebra::Similarity3::from_parts(nalgebra::Vector3::new(0.5, 0.5, 0.0).into(), rot, 0.5).into()
+fn model_transform2() -> [nalgebra::Matrix4<f32>; 6] {
+    let z_pos = nalgebra::UnitQuaternion::identity();
+    let z_neg = nalgebra::UnitQuaternion::face_towards(
+        &Vector3::new(0.0, 0.0, -1.0),
+        &Vector3::new(0.0, 1.0, 0.0),
+    );
+    let x_pos = nalgebra::UnitQuaternion::face_towards(
+        &Vector3::new(1.0, 0.0, 0.0),
+        &Vector3::new(0.0, 1.0, 0.0),
+    );
+    let x_neg = nalgebra::UnitQuaternion::face_towards(
+        &Vector3::new(-1.0, 0.0, 0.0),
+        &Vector3::new(0.0, 1.0, 0.0),
+    );
+    let y_pos = nalgebra::UnitQuaternion::face_towards(
+        &Vector3::new(0.0, 1.0, 0.0),
+        &Vector3::new(0.0, 0.0, 1.0),
+    );
+    let y_neg = nalgebra::UnitQuaternion::face_towards(
+        &Vector3::new(0.0, -1.0, 0.0),
+        &Vector3::new(0.0, 0.0, -1.0),
+    );
+    [
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, 0.5).into(), z_pos, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, -0.5).into(), z_neg, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.5, 0.0, 0.0).into(), x_pos, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(-0.5, 0.0, 0.0).into(), x_neg, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.5, 0.0).into(), y_pos, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, -0.5, 0.0).into(), y_neg, 0.5).into(),
+    ]
 }
 
 impl<B> SimpleGraphicsPipeline<B, Scene<B>> for MeshRenderPipeline<B>
@@ -254,7 +281,7 @@ where
                         // proj: scene.camera.proj.to_homogeneous(),
                         proj: scene.camera.proj,
                         view: scene.camera.view.to_homogeneous(),
-                        model: model_transform(),
+                        model: model_transform2(),
                     }],
                 )
                 .unwrap()
@@ -313,175 +340,193 @@ where
     fn dispose(self, _factory: &mut Factory<B>, _scene: &Scene<B>) {}
 }
 
-#[cfg(any(feature = "dx12", feature = "metal", feature = "vulkan"))]
 fn main() {
     env_logger::Builder::from_default_env()
         .filter_module("meshes", log::LevelFilter::Trace)
         .init();
 
-    let config: Config = Default::default();
-
-    let (mut factory, mut families): (Factory<Backend>, _) = rendy::factory::init(config).unwrap();
-
-    let mut event_loop = EventsLoop::new();
+    let mut event_loop = EventLoop::new();
 
     let window = WindowBuilder::new()
-        .with_title("Rendy example")
-        .build(&event_loop)
-        .unwrap();
+        .with_inner_size((960, 640).into())
+        .with_title("Rendy example");
 
-    event_loop.poll_events(|_| ());
+    let config: Config = Default::default();
+    let rendy = AnyWindowedRendy::init_auto(&config, window, &event_loop).unwrap();
 
-    let surface = factory.create_surface(&window);
+    rendy::with_any_windowed_rendy!((rendy)
+        use back; (mut factory, mut families, surface, window) => {
 
-    let mut graph_builder = GraphBuilder::<Backend, Scene<Backend>>::new();
+        let mut graph_builder = GraphBuilder::<Backend, Scene<Backend>>::new();
 
-    let size = window
-        .get_inner_size()
-        .unwrap()
-        .to_physical(window.get_hidpi_factor());
-    let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
-    let aspect = size.width / size.height;
+        let size = window.inner_size().to_physical(window.hidpi_factor());
+        let window_kind = hal::image::Kind::D2(size.width as u32, size.height as u32, 1, 1);
+        let aspect = size.width / size.height;
 
-    let color = graph_builder.create_image(
-        window_kind,
-        1,
-        factory.get_surface_format(&surface),
-        Some(hal::command::ClearValue::Color([0.5, 0.5, 1.0, 1.0].into())),
-    );
+        let depth = graph_builder.create_image(
+            window_kind,
+            1,
+            hal::format::Format::D32Sfloat,
+            Some(hal::command::ClearValue {
+                depth_stencil: hal::command::ClearDepthStencil {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            }),
+        );
 
-    let depth = graph_builder.create_image(
-        window_kind,
-        1,
-        hal::format::Format::D16Unorm,
-        Some(hal::command::ClearValue::DepthStencil(
-            hal::command::ClearDepthStencil(1.0, 0),
-        )),
-    );
+        let pass = graph_builder.add_node(
+            MeshRenderPipeline::builder()
+                .into_subpass()
+                .with_color_surface()
+                .with_depth_stencil(depth)
+                .into_pass()
+                .with_surface(
+                    surface,
+                    hal::window::Extent2D {
+                        width: size.width as _,
+                        height: size.height as _,
+                    },
+                    Some(hal::command::ClearValue {
+                        color: hal::command::ClearColor {
+                            float32: [1.0, 1.0, 1.0, 1.0],
+                        },
+                    }),
+                ),
+        );
 
-    let pass = graph_builder.add_node(
-        MeshRenderPipeline::builder()
-            .into_subpass()
-            .with_color(color)
-            .with_depth_stencil(depth)
-            .into_pass(),
-    );
+        let bm = crystal::read_map("hidden_ramp.txt").expect("could not read file");
 
-    let present_builder = PresentNode::builder(&factory, surface, color).with_dependency(pass);
+        let mut planes = crystal::PlanesSep::new();
+        planes.create_planes(&bm);
+        let mut scene = Scene {
+            camera: Camera {
+                proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
+                    .to_homogeneous(),
+                view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
+            },
+            object_mesh: None,
+            per_instance: vec![],
+        };
+        // let mut rng = rand::thread_rng();
+        // let col_dist = Uniform::new(0.5, 1.0);
 
-    let frames = present_builder.image_count();
+        let mut rc = RandomColor::new();
+        rc.luminosity(random_color::Luminosity::Bright);
+        let planes : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
+        println!("planes: {}", planes.len());
+        for i in 0..std::cmp::min(NUM_INSTANCES as usize,planes.len()) {
+            let color = rc.to_rgb_array();
+            let point = planes[i].cell;
+            let dir = match planes[i].dir {
+                crystal::Dir::ZxPos => 4,
+                crystal::Dir::ZxNeg => 5,
+                crystal::Dir::YzPos => 2,
+                crystal::Dir::YzNeg => 3,
+                crystal::Dir::XyPos => 0,
+                crystal::Dir::XyNeg => 1,
+            };
+            scene.per_instance.push(PerInstance{
+                // translate:
+                // nalgebra::Vector4::new((i / 6 * 6) as f32, 0.0, 0.0, 1.0),
+                translate: nalgebra::Vector4::new(point[0] as f32, point[1] as f32, point[2] as f32, 1.0),
+                color : nalgebra::Vector3::new(
+                    color[0] as f32 / 255.0,
+                    color[1] as f32 / 255.0,
+                    color[2] as f32 / 255.0,
+                ),
+                dir : dir,
+            });
+        }
 
-    graph_builder.add_node(present_builder);
-
-    let mut scene = Scene {
-        camera: Camera {
-            proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
-                .to_homogeneous(),
-            view: nalgebra::Projective3::identity() * nalgebra::Translation3::new(0.0, 0.0, 10.0),
-        },
-        object_mesh: None,
-        per_instance: vec![],
-    };
-    // let mut rng = rand::thread_rng();
-    // let col_dist = Uniform::new(0.5, 1.0);
-
-    let mut rc = RandomColor::new();
-    rc.luminosity(random_color::Luminosity::Bright);
-    for i in 0..NUM_INSTANCES {
-        let color = rc.to_rgb_array();
-        scene.per_instance.push(PerInstance(
-            nalgebra::Vector4::new(
-                color[0] as f32 / 255.0,
-                color[1] as f32 / 255.0,
-                color[2] as f32 / 255.0,
-                1.0,
-            ),
-            nalgebra::Vector4::new(i as f32, 0.0, 0.0, 1.0),
-        ));
-    }
-
-    println!(
-        "crap: {:?}",
-        nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0).to_homogeneous()
-    );
-    println!(
-        "good: {:?}",
-        rendy_playground::math::perspective_projection(aspect as f32, 3.1415 / 4.0, 1.0, 200.0,)
-    );
-    log::info!("{:#?}", scene);
-
-    let mut graph = graph_builder
-        .with_frames_in_flight(frames)
+        let graph = graph_builder
         .build(&mut factory, &mut families, &scene)
         .unwrap();
 
-    // let icosphere = genmesh::generators::IcoSphere::subdivide(3);
-    // let icosphere = genmesh::generators::Torus::new(1f32, 0.5f32, 32, 32);
-    let icosphere = genmesh::generators::Plane::new();
-    // icosphere.
-    let indices: Vec<_> =
-        genmesh::Vertices::vertices(icosphere.indexed_polygon_iter().triangulate())
-            .map(|i| i as u32)
+        // let icosphere = genmesh::generators::IcoSphere::subdivide(3);
+        // let icosphere = genmesh::generators::Torus::new(1f32, 0.5f32, 32, 32);
+        let icosphere = genmesh::generators::Plane::new();
+        // icosphere.
+        let indices: Vec<_> =
+            genmesh::Vertices::vertices(icosphere.indexed_polygon_iter().triangulate())
+                .map(|i| i as u32)
+                .collect();
+
+        println!("indices: {}", indices.len());
+        let vertices: Vec<_> = icosphere
+            .shared_vertex_iter()
+            .map(|v| Position(v.pos.into()))
             .collect();
-
-    println!("indices: {}", indices.len());
-    let vertices: Vec<_> = icosphere
-        .shared_vertex_iter()
-        .map(|v| Position(v.pos.into()))
-        .collect();
-    println!("vertices: {}", vertices.len());
-    for v in &vertices {
-        println!("vert: {:?}", v);
-    }
-    scene.object_mesh = Some(
-        Mesh::<Backend>::builder()
-            .with_indices(&indices[..])
-            .with_vertices(&vertices[..])
-            .build(graph.node_queue(pass), &factory)
-            .unwrap(),
-    );
-
-    let started = time::Instant::now();
-
-    let mut frames = 0u64..;
-    // let rxy = Uniform::new(-1.0, 1.0);
-    // let rz = Uniform::new(0.0, 185.0);
-
-    let mut checkpoint = started;
-    let mut player_state = player::State::new();
-    let mut event_manager = player::EventManager::new();
-    while !event_manager.should_close() {
-        factory.maintain(&mut families);
-        player_state.apply_events(event_manager.poll_events(&mut event_loop));
-        scene.camera = Camera {
-            // proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
-            proj: rendy_playground::math::perspective_projection(
-                aspect as f32,
-                3.1415 / 4.0,
-                1.0,
-                200.0,
-            ),
-            view: player_state.get_view_matrix(),
-        };
-
-        graph.run(&mut factory, &mut families, &scene);
-        let elapsed = checkpoint.elapsed();
-
-        for pi in &mut scene.per_instance {
-            let color = rc.to_rgb_array();
-            pi.0 = nalgebra::Vector4::new(
-                color[0] as f32 / 255.0,
-                color[1] as f32 / 255.0,
-                color[2] as f32 / 255.0,
-                1.0,
-            );
+        println!("vertices: {}", vertices.len());
+        for v in &vertices {
+            println!("vert: {:?}", v);
         }
-    }
+        scene.object_mesh = Some(
+            Mesh::<Backend>::builder()
+                .with_indices(&indices[..])
+                .with_vertices(&vertices[..])
+                .build(graph.node_queue(pass), &factory)
+                .unwrap(),
+        );
 
-    graph.dispose(&mut factory, &scene);
-}
+        let started = time::Instant::now();
 
-#[cfg(not(any(feature = "dx12", feature = "metal", feature = "vulkan")))]
-fn main() {
-    panic!("Specify feature: { dx12, metal, vulkan }");
+        let mut frames = 0u64..;
+        // let rxy = Uniform::new(-1.0, 1.0);
+        // let rz = Uniform::new(0.0, 185.0);
+
+        let mut checkpoint = started;
+        let mut player_state = player::State::new();
+        let mut event_manager = player::EventManager::new();
+        let mut graph = Some(graph);
+        event_loop.run(move |event, _, control_flow| {
+            *control_flow = ControlFlow::Poll;
+            match event {
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                    _ => event_manager.window_event(event)
+                },
+                Event::EventsCleared => {
+                    if event_manager.should_close() {
+                        *control_flow = ControlFlow::Exit;
+                    }
+                    factory.maintain(&mut families);
+
+
+                    player_state.apply_events(event_manager.input_events());
+                    scene.camera = Camera {
+                        // proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0),
+                        proj: rendy_playground::math::perspective_projection(
+                            aspect as f32,
+                            3.1415 / 4.0,
+                            1.0,
+                            200.0,
+                        ),
+                        view: player_state.get_view_matrix(),
+                    };
+
+                    if let Some(ref mut graph) = graph {
+                        graph.run(&mut factory, &mut families, &scene);
+                    }
+                    let elapsed = checkpoint.elapsed();
+
+                    for pi in &mut scene.per_instance {
+                        let color = rc.to_rgb_array();
+                        pi.color = nalgebra::Vector3::new(
+                            color[0] as f32 / 255.0,
+                            color[1] as f32 / 255.0,
+                            color[2] as f32 / 255.0,
+                        );
+                    }
+                }
+                _ => {}
+            }
+            if *control_flow == ControlFlow::Exit {
+                if let Some(graph) = graph.take() {
+                    graph.dispose(&mut factory, &scene);
+                }
+                drop(scene.object_mesh.take());
+            }
+        });
+    });
 }

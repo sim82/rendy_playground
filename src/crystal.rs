@@ -275,7 +275,7 @@ impl Cell for Point3i {
         ]
     }
 }
-
+#[derive(Clone)]
 pub struct Plane {
     pub vertices: [i32; NUM_PLANE_CORNERS],
     pub dir: Dir,
