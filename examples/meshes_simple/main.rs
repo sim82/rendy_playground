@@ -80,10 +80,19 @@ struct UniformArgs {
 #[derive(Clone, Copy, Debug)]
 #[repr(C, align(16))]
 struct PerInstance {
-    translate: nalgebra::Vector4<f32>,
-    color: nalgebra::Vector3<f32>,
+    translate: nalgebra::Vector3<f32>,
     dir: u32,
+    color: nalgebra::Vector3<f32>,
+    pad: u32,
 }
+
+// #[derive(Clone, Copy, Debug)]
+// #[repr(C, align(16))]
+// struct PerInstanceDyn {
+//     translate: nalgebra::Vector4<f32>,
+//     color: nalgebra::Vector3<f32>,
+//     dir: u32,
+// }
 
 #[derive(Debug)]
 struct Camera {
@@ -150,7 +159,7 @@ where
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Vertex),
             SHADER_REFLECTION
-                .attributes(&["color", "translate", "dir"])
+                .attributes(&["translate", "dir", "color", "pad"])
                 .unwrap()
                 .gfx_vertex_input_desc(hal::pso::VertexInputRate::Instance(1)),
         ];
@@ -429,13 +438,14 @@ fn main() {
             scene.per_instance.push(PerInstance{
                 // translate:
                 // nalgebra::Vector4::new((i / 6 * 6) as f32, 0.0, 0.0, 1.0),
-                translate: nalgebra::Vector4::new(point[0] as f32, point[1] as f32, point[2] as f32, 1.0),
+                translate: nalgebra::Vector3::new(point[0] as f32, point[1] as f32, point[2] as f32),
+                dir : dir,
                 color : nalgebra::Vector3::new(
                     color[0] as f32 / 255.0,
                     color[1] as f32 / 255.0,
                     color[2] as f32 / 255.0,
                 ),
-                dir : dir,
+                pad : 0,
             });
         }
 
