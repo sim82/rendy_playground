@@ -17,7 +17,8 @@
 use gfx_backend_vulkan::Backend;
 use rand::prelude::*;
 use rendy::shader::SpirvReflection;
-use rendy_playground::crystal;
+use rendy_playground::{crystal, crystal::misc::RadWorker};
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
 use {
     genmesh::generators::{IndexedPolygon, SharedVertex},
     rand::distributions::{Distribution, Uniform},
@@ -102,7 +103,7 @@ struct Scene<B: hal::Backend> {
     object_mesh: Option<Mesh<B>>,
     per_instance_const: Vec<PerInstanceConst>,
     per_instance: Vec<PerInstance>,
-    rad_scene: crystal::rad::Scene,
+    rad_worker: crystal::misc::RadWorker,
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
@@ -138,6 +139,26 @@ struct MeshRenderPipeline<B: hal::Backend> {
     buffer: Escape<Buffer<B>>,
     sets: Vec<Escape<DescriptorSet<B>>>,
 }
+
+struct ProfileTimer {
+    label: std::string::String,
+    start: std::time::Instant,
+}
+
+impl ProfileTimer {
+    fn start(label: &str) -> Self {
+        ProfileTimer {
+            label: label.into(),
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+// impl Drop for ProfileTimer {
+//     fn drop(&mut self) {
+//         println!("{}: {:?}", self.label, self.start.elapsed());
+//     }
+// }
 
 impl<B> SimpleGraphicsPipelineDesc<B, Scene<B>> for MeshRenderPipelineDesc
 where
@@ -279,13 +300,19 @@ fn model_transform2() -> [nalgebra::Matrix4<f32>; 6] {
         &Vector3::new(0.0, -1.0, 0.0),
         &Vector3::new(0.0, 0.0, -1.0),
     );
+    // let unit = 0.125;
+    let unit = 0.125;
+    let scale = 0.126;
     [
-        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, 0.5).into(), z_pos, 0.5).into(),
-        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, -0.5).into(), z_neg, 0.5).into(),
-        nalgebra::Similarity3::from_parts(Vector3::new(0.5, 0.0, 0.0).into(), x_pos, 0.5).into(),
-        nalgebra::Similarity3::from_parts(Vector3::new(-0.5, 0.0, 0.0).into(), x_neg, 0.5).into(),
-        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.5, 0.0).into(), y_pos, 0.5).into(),
-        nalgebra::Similarity3::from_parts(Vector3::new(0.0, -0.5, 0.0).into(), y_neg, 0.5).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, unit).into(), z_pos, scale).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, -unit).into(), z_neg, scale)
+            .into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(unit, 0.0, 0.0).into(), x_pos, scale).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(-unit, 0.0, 0.0).into(), x_neg, scale)
+            .into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, unit, 0.0).into(), y_pos, scale).into(),
+        nalgebra::Similarity3::from_parts(Vector3::new(0.0, -unit, 0.0).into(), y_neg, scale)
+            .into(),
     ]
 }
 
@@ -303,6 +330,8 @@ where
         index: usize,
         scene: &Scene<B>,
     ) -> PrepareResult {
+        let pt = ProfileTimer::start("prepare");
+
         // println!("index: {}", index);
 
         // println!(
@@ -324,15 +353,15 @@ where
                 )
                 .unwrap()
         };
-        {
-            let per_instance = &scene.per_instance[..];
-            // println!(
-            //     "upload dyn {}: {}",
-            //     index,
-            //     // std::mem::size_of::<PerInstance>() * scene.per_instance.len(),
-            //     std::mem::size_of_val(per_instance)
-            // );
-        }
+        // {
+        //     let per_instance = &scene.per_instance[..];
+        //     println!(
+        //         "upload dyn {}: {}",
+        //         index,
+        //         // std::mem::size_of::<PerInstance>() * scene.per_instance.len(),
+        //         std::mem::size_of_val(per_instance)
+        //     );
+        // }
         if !scene.per_instance.is_empty() {
             unsafe {
                 factory
@@ -344,7 +373,6 @@ where
                     .unwrap()
             };
         }
-
         PrepareResult::DrawReuse
     }
 
@@ -355,6 +383,8 @@ where
         index: usize,
         scene: &Scene<B>,
     ) {
+        println!("draw");
+
         unsafe {
             encoder.bind_graphics_descriptor_sets(
                 layout,
@@ -448,6 +478,13 @@ fn main() {
         planes.create_planes(&bm);
         let planes_copy : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
 
+        let (tx, rx) = channel();
+        let (tx_sync, rx_sync) = channel(); // used as semaphore to sync with thread start
+        let (script_lines_sink, script_lines_source) = channel();
+
+        let rad_worker = RadWorker::start(crystal::rad::Scene::new(planes, bm), vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()], rx,        tx_sync,        script_lines_sink,);
+
+
         let mut scene = Scene {
             camera: Camera {
                 proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
@@ -457,7 +494,7 @@ fn main() {
             object_mesh: None,
             per_instance: vec![],
             per_instance_const: vec![],
-            rad_scene: crystal::rad::Scene::new(planes, bm),
+            rad_worker: rad_worker,
         };
 
         // let mut rng = rand::thread_rng();
@@ -478,7 +515,7 @@ fn main() {
                 crystal::Dir::XyNeg => 1,
             };
             scene.per_instance_const.push(PerInstanceConst{
-                translate: nalgebra::Vector3::new(point[0] as f32, point[1] as f32, point[2] as f32),
+                translate: nalgebra::Vector3::new(point[0] as f32 * 0.25, point[1] as f32 * 0.25, point[2] as f32 * 0.25),
                 dir : dir,
             });
             scene.per_instance.push(PerInstance{
@@ -531,6 +568,7 @@ fn main() {
         let mut player_state = player::State::new();
         let mut event_manager = player::EventManager::new();
         let mut graph = Some(graph);
+        rx_sync.recv().unwrap();
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
             match event {
@@ -558,6 +596,7 @@ fn main() {
                     };
 
                     if let Some(ref mut graph) = graph {
+                        let pt = ProfileTimer::start("graph.run");
                         graph.run(&mut factory, &mut families, &scene);
                     }
 
@@ -565,29 +604,36 @@ fn main() {
                     if (checkpoint.elapsed() >= std::time::Duration::from_secs(5))
                     {
                         checkpoint = time::Instant::now();
-                        let mut rng = thread_rng();
-                        let scene = &mut scene.rad_scene;
-                        for i in 0..scene.planes.num_planes() {
-                            // seriously, there is no Vec.fill?
-                            scene.diffuse[i] = Vector3::new(1f32, 1f32, 1f32);
-                            scene.emit[i] = Vector3::new(0.0, 0.0, 0.0);
-                        }
-                        let mut rc = RandomColor::new();
-                        rc.luminosity(random_color::Luminosity::Bright);
-                        let num_dots = 1000;
-                        for _ in 0..num_dots {
-                            let i = rng.gen_range(0, scene.planes.num_planes());
-                            let color = rc.to_rgb_array();
-                            scene.emit[i] = Vector3::new(color[0] as f32 / 255.0, color[1] as f32 / 255.0,color[2] as f32 / 255.0,);
+                        // let mut rng = thread_rng();
+                        // let scene = &mut scene.rad_scene;
+                        // for i in 0..scene.planes.num_planes() {
+                        //     // seriously, there is no Vec.fill?
+                        //     scene.diffuse[i] = Vector3::new(1f32, 1f32, 1f32);
+                        //     scene.emit[i] = Vector3::new(0.0, 0.0, 0.0);
+                        // }
+                        // let mut rc = RandomColor::new();
+                        // rc.luminosity(random_color::Luminosity::Bright);
+                        // let num_dots = 1000;
+                        // for _ in 0..num_dots {
+                        //     let i = rng.gen_range(0, scene.planes.num_planes());
+                        //     let color = rc.to_rgb_array();
+                        //     scene.emit[i] = Vector3::new(color[0] as f32 / 255.0, color[1] as f32 / 255.0,color[2] as f32 / 255.0,);
+                        // }
+                    }
+                    // {
+                    //     let pt= ProfileTimer::start("rad");
+                    //     scene.rad_scene.do_rad();
+                    // }
+                    // for i in 0..scene.rad_scene.planes.num_planes() {
+                    //     scene.per_instance[i].color[0] = scene.rad_scene.rad_front.r[i];
+                    //     scene.per_instance[i].color[1] = scene.rad_scene.rad_front.g[i];
+                    //     scene.per_instance[i].color[2] = scene.rad_scene.rad_front.b[i];
+                    // }
+                    if let Ok(buf) = scene.rad_worker.rx.try_recv() {
+                        for i in 0..buf.len() {
+                            scene.per_instance[i].color = buf[i];
                         }
                     }
-                    scene.rad_scene.do_rad();
-                    for i in 0..scene.rad_scene.planes.num_planes() {
-                        scene.per_instance[i].color[0] = scene.rad_scene.rad_front.r[i];
-                        scene.per_instance[i].color[1] = scene.rad_scene.rad_front.g[i];
-                        scene.per_instance[i].color[2] = scene.rad_scene.rad_front.b[i];
-                    }
-
 
                     // for pi in &mut scene.per_instance {
                     //     let color = rc.to_rgb_array();
