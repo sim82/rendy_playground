@@ -239,8 +239,11 @@ impl Environment {
     }
 
     fn send_all(&mut self, action: BindingAction) {
-        self.subscriptions
-            .drain_filter(|sub| sub.send(action.clone()).is_err());
+        // self.subscriptions
+        //     .drain_filter(|sub| sub.send(action.clone()).is_err());
+        for sub in &self.subscriptions {
+            sub.send(action.clone()).unwrap(); // TODO: switch back to drain_filter version
+        }
     }
 }
 

@@ -482,7 +482,7 @@ fn main() {
         let (tx_sync, rx_sync) = channel(); // used as semaphore to sync with thread start
         let (script_lines_sink, script_lines_source) = channel();
 
-        let rad_worker = RadWorker::start(crystal::rad::Scene::new(planes, bm), vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()], rx,        tx_sync,        script_lines_sink,);
+        let rad_worker = RadWorker::start(crystal::rads::Scene::new(planes, bm), vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()], rx,        tx_sync,        script_lines_sink,);
 
 
         let mut scene = Scene {

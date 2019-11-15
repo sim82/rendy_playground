@@ -1,6 +1,6 @@
 use crate::{
     crystal,
-    crystal::rad::Scene,
+    crystal::rads::Scene,
     crystal::{Bitmap, PlanesSep, Point3, Point3i, Vec3},
     script,
 };
@@ -196,7 +196,7 @@ impl RadWorker {
                     scene.apply_light(light_pos, Vec3::new(1f32, 0.8f32, 0.6f32));
                     light_update = false;
                 }
-                println!("do_rad");
+                // println!("do_rad");
 
                 scene.do_rad();
                 for (i, _) in scene.planes.planes_iter().enumerate() {
@@ -216,7 +216,7 @@ impl RadWorker {
                 if tx.send(chunk).is_err() {
                     println!("send failed.");
                 }
-                println!("send");
+                // println!("send");
 
                 let d_time = last_stat.elapsed();
                 if d_time >= Duration::from_secs(1) {
