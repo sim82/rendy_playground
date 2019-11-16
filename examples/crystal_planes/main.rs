@@ -196,7 +196,7 @@ fn main() {
 
         let mut main_loop = game::MainLoop::start(crystal::rads::Scene::new(planes, bm));
         main_loop.tx_game_event.send(game::GameEvent::SubscribeFrontBuffer(tx_rad_buffer));
-
+        main_loop.tx_game_event.send(game::GameEvent::UpdateLightPos(crystal::Point3::new( 60f32, 30f32, 50f32 )));
         let mut main_loop = Some(main_loop);
 
         event_loop.run(move |event, _, control_flow| {
@@ -228,7 +228,12 @@ fn main() {
                         let pt = ProfileTimer::start("graph.run");
                         graph.run(&mut factory, &mut families, &scene);
                     }
-
+                    if let Ok(rad_buffer) = scene.rx_rad_buffer.try_recv() {
+                        assert!(rad_buffer.len() == scene.per_instance.len());
+                        for i in 0..rad_buffer.len() {
+                            scene.per_instance[i].color = rad_buffer[i];
+                        }
+                    }
                     let elapsed = checkpoint.elapsed();
                     if (checkpoint.elapsed() >= std::time::Duration::from_secs(5))
                     {

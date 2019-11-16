@@ -21,37 +21,40 @@ pub struct MainLoop {
 }
 
 impl MainLoop {
-    pub fn start(scene: Scene) -> Self {
+    pub fn start(mut scene: Scene) -> Self {
         let (tx_game_event, rx_game_event) = channel();
 
         let join_handle = spawn(move || {
             let mut do_stop = false;
             let mut tx_front_buffer = None;
             while !do_stop {
-                match rx_game_event.recv().unwrap() {
-                    GameEvent::UpdateLightPos(light_pos) => {
-                        scene.clear_emit();
-                        scene.apply_light(light_pos, Vec3::new(1f32, 0.8f32, 0.6f32));
+                if let Ok(event) = rx_game_event.try_recv() {
+                    match event {
+                        GameEvent::UpdateLightPos(light_pos) => {
+                            scene.clear_emit();
+                            scene.apply_light(light_pos, Vec3::new(1f32, 0.8f32, 0.6f32));
+                        }
+                        GameEvent::SubscribeFrontBuffer(sender) => {
+                            tx_front_buffer = Some(sender);
+                        }
+                        GameEvent::Stop => do_stop = true,
                     }
-                    GameEvent::SubscribeFrontBuffer(sender) => {
-                        tx_front_buffer = Some(sender);
-                    }
-                    GameEvent::Stop => do_stop = true,
                 }
-            }
 
-            scene.do_rad();
-            if let Some(tx_front_buffer) = tx_front_buffer {
-                let colors_cpu = vec![];
-                colors_cpu.reserve(scene.planes.planes.len());
-                for (i, _) in scene.planes.planes_iter().enumerate() {
-                    colors_cpu.push(Vec3::new(
-                        scene.rad_front.r[i],
-                        scene.rad_front.g[i],
-                        scene.rad_front.b[i],
-                    ));
+                scene.do_rad();
+                if let Some(ref mut tx_front_buffer) = tx_front_buffer {
+                    let mut colors_cpu = vec![];
+                    colors_cpu.reserve(scene.planes.planes.len());
+                    for (i, _) in scene.planes.planes_iter().enumerate() {
+                        colors_cpu.push(Vec3::new(
+                            scene.rad_front.r[i],
+                            scene.rad_front.g[i],
+                            scene.rad_front.b[i],
+                        ));
+                    }
+                    // println!("send fornt buffer");
+                    tx_front_buffer.send(colors_cpu).unwrap();
                 }
-                tx_front_buffer.send(colors_cpu).unwrap();
             }
         });
 
