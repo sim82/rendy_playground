@@ -17,7 +17,7 @@
 use gfx_backend_vulkan::Backend;
 use rand::prelude::*;
 use rendy::shader::SpirvReflection;
-use rendy_playground::{crystal, crystal::misc::RadWorker};
+use rendy_playground::crystal;
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
 use {
     genmesh::generators::{IndexedPolygon, SharedVertex},
@@ -103,7 +103,6 @@ struct Scene<B: hal::Backend> {
     object_mesh: Option<Mesh<B>>,
     per_instance_const: Vec<PerInstanceConst>,
     per_instance: Vec<PerInstance>,
-    rad_worker: crystal::misc::RadWorker,
 }
 
 const UNIFORM_SIZE: u64 = size_of::<UniformArgs>() as u64;
@@ -302,7 +301,7 @@ fn model_transform2() -> [nalgebra::Matrix4<f32>; 6] {
     );
     // let unit = 0.125;
     let unit = 0.125;
-    let scale = 0.126;
+    let scale = 0.125;
     [
         nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, unit).into(), z_pos, scale).into(),
         nalgebra::Similarity3::from_parts(Vector3::new(0.0, 0.0, -unit).into(), z_neg, scale)
@@ -478,13 +477,6 @@ fn main() {
         planes.create_planes(&bm);
         let planes_copy : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
 
-        let (tx, rx) = channel();
-        let (tx_sync, rx_sync) = channel(); // used as semaphore to sync with thread start
-        let (script_lines_sink, script_lines_source) = channel();
-
-        let rad_worker = RadWorker::start(crystal::rads::Scene::new(planes, bm), vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()], rx,        tx_sync,        script_lines_sink,);
-
-
         let mut scene = Scene {
             camera: Camera {
                 proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
@@ -494,7 +486,6 @@ fn main() {
             object_mesh: None,
             per_instance: vec![],
             per_instance_const: vec![],
-            rad_worker: rad_worker,
         };
 
         // let mut rng = rand::thread_rng();
@@ -568,7 +559,6 @@ fn main() {
         let mut player_state = player::State::new();
         let mut event_manager = player::EventManager::new();
         let mut graph = Some(graph);
-        rx_sync.recv().unwrap();
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
             match event {
@@ -629,12 +619,6 @@ fn main() {
                     //     scene.per_instance[i].color[1] = scene.rad_scene.rad_front.g[i];
                     //     scene.per_instance[i].color[2] = scene.rad_scene.rad_front.b[i];
                     // }
-                    if let Ok(buf) = scene.rad_worker.rx.try_recv() {
-                        for i in 0..buf.len() {
-                            scene.per_instance[i].color = buf[i];
-                        }
-                    }
-
                     // for pi in &mut scene.per_instance {
                     //     let color = rc.to_rgb_array();
                     //     pi.color = nalgebra::Vector3::new(
