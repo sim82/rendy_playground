@@ -18,6 +18,7 @@ pub type Vec3 = nalgebra::Vector3<f32>;
 pub type Point2i = nalgebra::Point2<i32>;
 pub type Point3i = nalgebra::Point3<i32>;
 pub type Point3 = nalgebra::Point3<f32>;
+pub type Color = Vec3;
 
 const NUM_PLANE_CORNERS: usize = 4;
 
@@ -294,8 +295,8 @@ impl Plane {
 }
 
 pub struct PlanesSep {
-    vertices: Vec<Point3i>,
-    planes: Vec<Plane>,
+    pub vertices: Vec<Point3i>,
+    pub planes: Vec<Plane>,
 }
 
 impl PlanesSep {

@@ -144,7 +144,7 @@ impl ProfileTimer {
 
 impl Drop for ProfileTimer {
     fn drop(&mut self) {
-        // println!("{}: {:?}", self.label, self.start.elapsed());
+        println!("{}: {:?}", self.label, self.start.elapsed());
     }
 }
 
@@ -153,6 +153,7 @@ pub struct Scene<B: hal::Backend> {
     pub object_mesh: Option<Mesh<B>>,
     pub per_instance_const: Vec<PerInstanceConst>,
     pub per_instance: Vec<PerInstance>,
+    pub rx_rad_buffer: Receiver<Vec<crystal::Color>>,
 }
 
 impl<B> SimpleGraphicsPipelineDesc<B, Scene<B>> for MeshRenderPipelineDesc
@@ -337,15 +338,21 @@ where
                 .unwrap()
         };
         if !scene.per_instance.is_empty() {
-            unsafe {
-                factory
-                    .upload_visible_buffer(
-                        &mut self.buffer,
-                        per_instance_offset(index, self.align),
-                        &scene.per_instance[..],
-                    )
-                    .unwrap()
-            };
+            if let Ok(rad_buffer) = scene.rx_rad_buffer.try_recv() {
+                assert!(rad_buffer.len() == scene.per_instance.len());
+                for i in 0..rad_buffer.len() {
+                    scene.per_instance[i].color = rad_buffer[i];
+                }
+                unsafe {
+                    factory
+                        .upload_visible_buffer(
+                            &mut self.buffer,
+                            per_instance_offset(index, self.align),
+                            &scene.per_instance[..],
+                        )
+                        .unwrap()
+                };
+            }
         }
         PrepareResult::DrawReuse
     }

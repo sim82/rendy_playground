@@ -49,8 +49,10 @@ use render::{
     Camera, MeshRenderPipeline, MeshRenderPipelineDesc, PerInstance, PerInstanceConst,
     ProfileTimer, Scene,
 };
-mod rad;
+pub mod rad;
 use rad::RadWorker;
+
+pub mod game;
 
 fn main() {
     env_logger::Builder::from_default_env()
@@ -113,13 +115,9 @@ fn main() {
         planes.create_planes(&bm);
         let planes_copy : Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
 
-        let (tx, rx) = channel();
-        let (tx_sync, rx_sync) = channel(); // used as semaphore to sync with thread start
-        let (script_lines_sink, script_lines_source) = channel();
-
-        let rad_worker = RadWorker::start(crystal::rads::Scene::new(planes, bm), vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()], rx,        tx_sync,        script_lines_sink,);
 
 
+        let (tx_rad_buffer, rx_rad_buffer) = channel();
         let mut scene = Scene {
             camera: Camera {
                 proj: nalgebra::Perspective3::new(aspect as f32, 3.1415 / 4.0, 1.0, 200.0)
@@ -129,6 +127,7 @@ fn main() {
             object_mesh: None,
             per_instance: vec![],
             per_instance_const: vec![],
+            rx_rad_buffer: rx_rad_buffer,
         };
 
         let mut rc = RandomColor::new();
@@ -194,7 +193,12 @@ fn main() {
         let mut player_state = player::State::new();
         let mut event_manager = player::EventManager::new();
         let mut graph = Some(graph);
-        rx_sync.recv().unwrap();
+
+        let mut main_loop = game::MainLoop::start(crystal::rads::Scene::new(planes, bm));
+        main_loop.tx_game_event.send(game::GameEvent::SubscribeFrontBuffer(tx_rad_buffer));
+
+        let mut main_loop = Some(main_loop);
+
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
             match event {
@@ -230,19 +234,21 @@ fn main() {
                     {
                         checkpoint = time::Instant::now();
                     }
-                    if let Ok(buf) = rad_worker.rx.try_recv() {
-                        for i in 0..buf.len() {
-                            scene.per_instance[i].color = buf[i];
-                        }
-                    }
                 }
                 _ => {}
             }
             if *control_flow == ControlFlow::Exit {
+                println!("waiting for MainLoop ...");
+                if let Some(main_loop) = main_loop.take() {
+                    main_loop.tx_game_event.send(game::GameEvent::Stop).unwrap();
+                    main_loop.join();
+                }
+                println!("done.");
                 if let Some(graph) = graph.take() {
                     graph.dispose(&mut factory, &scene);
                 }
                 drop(scene.object_mesh.take());
+                println!("end.");
             }
         });
     });
