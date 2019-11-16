@@ -1,10 +1,10 @@
-use crate::{
+use rand::{thread_rng, Rng};
+use rendy_playground::{
     crystal,
     crystal::rads::Scene,
     crystal::{Bitmap, PlanesSep, Point3, Point3i, Vec3},
     script,
 };
-use rand::{thread_rng, Rng};
 use std::{
     sync::mpsc::{channel, sync_channel, Receiver, Sender},
     thread::{spawn, JoinHandle},

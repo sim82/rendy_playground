@@ -1,6 +1,8 @@
 use nalgebra::Vector3;
-use rendy_playground::{crystal, crystal::misc::RadWorker};
+use rendy_playground::crystal;
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
+use std::time::{Duration, Instant};
+
 fn main() {
     let bm = crystal::read_map("hidden_ramp.txt").expect("could not read file");
 
@@ -8,21 +10,19 @@ fn main() {
     planes.create_planes(&bm);
     let planes_copy: Vec<crystal::Plane> = planes.planes_iter().cloned().collect();
 
-    let (tx, rx) = channel();
-    let (tx_sync, rx_sync) = channel(); // used as semaphore to sync with thread start
-    let (script_lines_sink, script_lines_source) = channel();
+    let mut scene = crystal::rads::Scene::new(planes, bm);
+    let mut last_stat = Instant::now();
+    loop {
+        scene.do_rad();
+        let d_time = last_stat.elapsed();
+        if d_time >= Duration::from_secs(1) {
+            let pintss = scene.pints as f64
+                / (d_time.as_secs() as f64 + d_time.subsec_nanos() as f64 * 1e-9);
+            scene.pints = 0;
 
-    let rad_worker = RadWorker::start(
-        crystal::rads::Scene::new(planes, bm),
-        vec![Vector3::new(0.0, 0.0, 0.0); planes_copy.len()],
-        rx,
-        tx_sync,
-        script_lines_sink,
-    );
-
-    rx_sync.recv().unwrap();
-
-    while let Ok(color) = rad_worker.rx.recv() {
-        // println!("color");
+            println!("pint/s: {:e}", pintss);
+            // log::info!("bounces/s: {:e}", pintss);
+            last_stat = Instant::now();
+        }
     }
 }
