@@ -42,6 +42,10 @@ impl MainLoop {
                 }
 
                 scene.do_rad();
+                let sum = scene.rad_front.r.iter().sum::<f32>()
+                    + scene.rad_front.g.iter().sum::<f32>()
+                    + scene.rad_front.b.iter().sum::<f32>();
+                println!("sum: {}", sum);
                 if let Some(ref mut tx_front_buffer) = tx_front_buffer {
                     let mut colors_cpu = vec![];
                     colors_cpu.reserve(scene.planes.planes.len());

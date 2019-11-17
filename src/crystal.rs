@@ -1,7 +1,17 @@
 pub mod ffs;
 // pub mod misc;
 // pub mod rad;
-pub mod rads;
+
+// mod rad_expv;
+mod rad_impv;
+mod rad_par;
+mod rad_ref;
+// mod rad_stdsimd;
+pub mod rads {
+    // pub use super::rad_stdsimd::*;
+    // pub use super::rad_impv::*;
+    pub use super::rad_par::*;
+}
 pub mod util;
 use std::fs::File;
 use std::io::{BufRead, BufReader};

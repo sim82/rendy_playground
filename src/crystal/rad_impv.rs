@@ -416,21 +416,38 @@ impl RadWorkblockSimd<'_> {
                 let vg = from_slice2(&g[j..j + 2]);
                 let vb = from_slice2(&b[j..j + 2]);
 
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_r.iter_mut(), vdiffuse_r.iter(), ff.iter(), vr.iter())
-                {
-                    *sum += d * f * v;
+                for (sum_r, sum_g, sum_b, diff_r, diff_g, diff_b, f, v_r, v_g, v_b) in itertools::izip!(
+                    vsum_r.iter_mut(),
+                    vsum_g.iter_mut(),
+                    vsum_b.iter_mut(),
+                    vdiffuse_r.iter(),
+                    vdiffuse_g.iter(),
+                    vdiffuse_b.iter(),
+                    ff.iter(),
+                    vr.iter(),
+                    vg.iter(),
+                    vb.iter()
+                ) {
+                    *sum_r += diff_r * f * v_r;
+                    *sum_g += diff_g * f * v_g;
+                    *sum_b += diff_b * f * v_b;
                 }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_g.iter_mut(), vdiffuse_g.iter(), ff.iter(), vg.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_b.iter_mut(), vdiffuse_b.iter(), ff.iter(), vb.iter())
-                {
-                    *sum += d * f * v;
-                }
+
+                // for (sum, d, f, v) in
+                //     itertools::izip!(vsum_r.iter_mut(), vdiffuse_r.iter(), ff.iter(), vr.iter())
+                // {
+                //     *sum += d * f * v;
+                // }
+                // for (sum, d, f, v) in
+                //     itertools::izip!(vsum_g.iter_mut(), vdiffuse_g.iter(), ff.iter(), vg.iter())
+                // {
+                //     *sum += d * f * v;
+                // }
+                // for (sum, d, f, v) in
+                //     itertools::izip!(vsum_b.iter_mut(), vdiffuse_b.iter(), ff.iter(), vb.iter())
+                // {
+                //     *sum += d * f * v;
+                // }
             }
 
             rad_r += vsum_r.iter().sum::<f32>();
@@ -450,20 +467,21 @@ impl RadWorkblockSimd<'_> {
                 let vg = from_slice4(&g[j..j + 4]);
                 let vb = from_slice4(&b[j..j + 4]);
 
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_r.iter_mut(), vdiffuse_r.iter(), ff.iter(), vr.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_g.iter_mut(), vdiffuse_g.iter(), ff.iter(), vg.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_b.iter_mut(), vdiffuse_b.iter(), ff.iter(), vb.iter())
-                {
-                    *sum += d * f * v;
+                for (sum_r, sum_g, sum_b, diff_r, diff_g, diff_b, f, v_r, v_g, v_b) in itertools::izip!(
+                    vsum_r.iter_mut(),
+                    vsum_g.iter_mut(),
+                    vsum_b.iter_mut(),
+                    vdiffuse_r.iter(),
+                    vdiffuse_g.iter(),
+                    vdiffuse_b.iter(),
+                    ff.iter(),
+                    vr.iter(),
+                    vg.iter(),
+                    vb.iter()
+                ) {
+                    *sum_r += diff_r * f * v_r;
+                    *sum_g += diff_g * f * v_g;
+                    *sum_b += diff_b * f * v_b;
                 }
             }
             rad_r += vsum_r.iter().sum::<f32>();
@@ -483,20 +501,21 @@ impl RadWorkblockSimd<'_> {
                 let vg = from_slice8(&g[j..j + 8]);
                 let vb = from_slice8(&b[j..j + 8]);
 
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_r.iter_mut(), vdiffuse_r.iter(), ff.iter(), vr.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_g.iter_mut(), vdiffuse_g.iter(), ff.iter(), vg.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_b.iter_mut(), vdiffuse_b.iter(), ff.iter(), vb.iter())
-                {
-                    *sum += d * f * v;
+                for (sum_r, sum_g, sum_b, diff_r, diff_g, diff_b, f, v_r, v_g, v_b) in itertools::izip!(
+                    vsum_r.iter_mut(),
+                    vsum_g.iter_mut(),
+                    vsum_b.iter_mut(),
+                    vdiffuse_r.iter(),
+                    vdiffuse_g.iter(),
+                    vdiffuse_b.iter(),
+                    ff.iter(),
+                    vr.iter(),
+                    vg.iter(),
+                    vb.iter()
+                ) {
+                    *sum_r += diff_r * f * v_r;
+                    *sum_g += diff_g * f * v_g;
+                    *sum_b += diff_b * f * v_b;
                 }
             }
             rad_r += vsum_r.iter().sum::<f32>();
@@ -516,20 +535,21 @@ impl RadWorkblockSimd<'_> {
                 let vg = from_slice16(&g[j..j + 16]);
                 let vb = from_slice16(&b[j..j + 16]);
 
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_r.iter_mut(), vdiffuse_r.iter(), ff.iter(), vr.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_g.iter_mut(), vdiffuse_g.iter(), ff.iter(), vg.iter())
-                {
-                    *sum += d * f * v;
-                }
-                for (sum, d, f, v) in
-                    itertools::izip!(vsum_b.iter_mut(), vdiffuse_b.iter(), ff.iter(), vb.iter())
-                {
-                    *sum += d * f * v;
+                for (sum_r, sum_g, sum_b, diff_r, diff_g, diff_b, f, v_r, v_g, v_b) in itertools::izip!(
+                    vsum_r.iter_mut(),
+                    vsum_g.iter_mut(),
+                    vsum_b.iter_mut(),
+                    vdiffuse_r.iter(),
+                    vdiffuse_g.iter(),
+                    vdiffuse_b.iter(),
+                    ff.iter(),
+                    vr.iter(),
+                    vg.iter(),
+                    vb.iter()
+                ) {
+                    *sum_r += diff_r * f * v_r;
+                    *sum_g += diff_g * f * v_g;
+                    *sum_b += diff_b * f * v_b;
                 }
             }
             rad_r += vsum_r.iter().sum::<f32>();

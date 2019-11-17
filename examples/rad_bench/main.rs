@@ -1,8 +1,24 @@
 use nalgebra::Vector3;
-use rendy_playground::crystal;
+use rand::prelude::*;
+use rand::SeedableRng;
+use random_color::RandomColor;
+use rendy_playground::{crystal, crystal::Vec3};
 use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
 use std::time::{Duration, Instant};
+trait ToRgbVec3 {
+    fn to_rgb_vec3(&mut self) -> Vec3;
+}
 
+impl ToRgbVec3 for RandomColor {
+    fn to_rgb_vec3(&mut self) -> Vec3 {
+        let a = self.to_rgb_array();
+        Vec3::new(
+            a[0] as f32 / 255f32,
+            a[1] as f32 / 255f32,
+            a[2] as f32 / 255f32,
+        )
+    }
+}
 fn main() {
     let bm = crystal::read_map("hidden_ramp.txt").expect("could not read file");
 
@@ -12,8 +28,29 @@ fn main() {
 
     let mut scene = crystal::rads::Scene::new(planes, bm);
     let mut last_stat = Instant::now();
+    let mut rng: StdRng = SeedableRng::seed_from_u64(12345);
+
+    for c in &mut scene.diffuse {
+        *c = Vec3::new(
+            rng.gen_range(0.0, 1.0),
+            rng.gen_range(0.0, 1.0),
+            rng.gen_range(0.0, 1.0),
+        );
+    }
+    for c in &mut scene.emit {
+        *c = Vec3::new(
+            rng.gen_range(0.0, 1.0),
+            rng.gen_range(0.0, 1.0),
+            rng.gen_range(0.0, 1.0),
+        );
+    }
     loop {
         scene.do_rad();
+        let sum = scene.rad_front.r.iter().sum::<f32>()
+            + scene.rad_front.g.iter().sum::<f32>()
+            + scene.rad_front.b.iter().sum::<f32>();
+        println!("sum: {}", sum);
+        // scene.rad_
         let d_time = last_stat.elapsed();
         if d_time >= Duration::from_secs(1) {
             let pintss = scene.pints as f64

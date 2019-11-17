@@ -49,8 +49,8 @@ use render::{
     Camera, MeshRenderPipeline, MeshRenderPipelineDesc, PerInstance, PerInstanceConst,
     ProfileTimer, Scene,
 };
-pub mod rad;
-use rad::RadWorker;
+// pub mod rad;
+// use rad::RadWorker;
 
 pub mod game;
 
