@@ -197,6 +197,10 @@ impl State {
     pub fn get_view_matrix(&self) -> Projective3<f32> {
         self.player_model.get_view_matrix()
     }
+
+    pub fn input_state(&self) -> &InputState {
+        &self.input_state
+    }
 }
 
 pub struct EventManager /*LOL*/ {
