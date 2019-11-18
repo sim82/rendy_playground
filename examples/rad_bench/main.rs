@@ -20,6 +20,10 @@ impl ToRgbVec3 for RandomColor {
     }
 }
 fn main() {
+    unsafe {
+        // don't need / want denormals -> flush to zero
+        core::arch::x86_64::_MM_SET_FLUSH_ZERO_MODE(core::arch::x86_64::_MM_FLUSH_ZERO_ON);
+    }
     let bm = crystal::read_map("hidden_ramp.txt").expect("could not read file");
 
     let mut planes = crystal::PlanesSep::new();
@@ -44,13 +48,16 @@ fn main() {
             rng.gen_range(0.0, 1.0),
         );
     }
+    let mut sum = 0f32;
     loop {
         scene.do_rad();
-        let sum = scene.rad_front.r.iter().sum::<f32>()
+        let sum_new = scene.rad_front.r.iter().sum::<f32>()
             + scene.rad_front.g.iter().sum::<f32>()
             + scene.rad_front.b.iter().sum::<f32>();
-        println!("sum: {}", sum);
-        // scene.rad_
+        if sum != sum_new {
+            println!("sum: {}", sum);
+            sum = sum_new;
+        }
         let d_time = last_stat.elapsed();
         if d_time >= Duration::from_secs(1) {
             let pintss = scene.pints as f64

@@ -37,6 +37,7 @@ serde = "*"
 serde_derive = "*"
 serde_json = "*"
 winit = "0.20.0-alpha4"
+simdeez = "*"
 
 [profile.dev]
 opt-level = 2      # controls the `--opt-level` the compiler builds with.

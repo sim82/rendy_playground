@@ -2,7 +2,9 @@ use super::{ffs, util, PlanesSep};
 #[allow(unused_imports)]
 use super::{Bitmap, BlockMap, DisplayWrap, Point3, Point3i, Vec3, Vec3i};
 use rayon::prelude::*;
-use std::arch::x86_64::{f32x16, f32x2, f32x4, f32x8};
+use simdeez::avx2::Avx2;
+use simdeez::sse2::Sse2;
+use simdeez::Simd;
 use std::time::Instant;
 
 pub struct RadBuffer {
@@ -90,10 +92,10 @@ impl RadBuffer {
 
 pub struct Blocklist {
     single: Vec<(u32, f32)>,
-    vec2_ff: Vec<f32x2>, // keep simd vectors densely packed
-    vec4_ff: Vec<f32x4>,
-    vec8_ff: Vec<f32x8>,
-    vec16_ff: Vec<f32x16>,
+    // vec2_ff: Vec<f32x2>, // keep simd vectors densely packed
+    vec4_ff: Vec<<Sse2 as Simd>::Vf32>,
+    vec8_ff: Vec<<Avx2 as Simd>::Vf32>,
+    // vec16_ff: Vec<f32x16>,
     vec2: Vec<u32>,
     vec4: Vec<u32>,
     vec8: Vec<u32>,
@@ -106,32 +108,25 @@ impl Blocklist {
         let mut vec8 = Vec::new();
         let mut vec4 = Vec::new();
         let mut vec2 = Vec::new();
-        let mut vec16_ff = Vec::new();
+        // let mut vec16_ff = Vec::new();
         let mut vec8_ff = Vec::new();
         let mut vec4_ff = Vec::new();
-        let mut vec2_ff = Vec::new();
+        // let mut vec2_ff = Vec::new();
         let mut single = Vec::new();
 
-        for ext in extents
-            .iter()
-            .flat_map(|x| x.split_aligned(&[16, 8, 4, 2, 1]))
-        {
+        for ext in extents.iter().flat_map(|x| x.split_aligned(&[8, 4, 1])) {
             match ext.ffs.len() {
-                16 => {
-                    vec16.push(ext.start);
-                    vec16_ff.push(f32x16::from_slice_unaligned(&ext.ffs[..]));
-                }
                 8 => {
                     vec8.push(ext.start);
-                    vec8_ff.push(f32x8::from_slice_unaligned(&ext.ffs[..]));
+                    unsafe {
+                        vec8_ff.push(Avx2::loadu_ps(&ext.ffs[0]));
+                    }
                 }
                 4 => {
                     vec4.push(ext.start);
-                    vec4_ff.push(f32x4::from_slice_unaligned(&ext.ffs[..]));
-                }
-                2 => {
-                    vec2.push(ext.start);
-                    vec2_ff.push(f32x2::from_slice_unaligned(&ext.ffs[..]));
+                    unsafe {
+                        vec4_ff.push(Sse2::loadu_ps(&ext.ffs[0]));
+                    }
                 }
                 1 => single.push((ext.start, ext.ffs[0])),
                 _ => panic!("bad extent size: {}", ext.ffs.len()),
@@ -144,18 +139,15 @@ impl Blocklist {
             vec4: vec4,
             vec8: vec8,
             vec16: vec16,
-            vec2_ff: vec2_ff,
             vec4_ff: vec4_ff,
             vec8_ff: vec8_ff,
-            vec16_ff: vec16_ff,
         }
     }
 
     pub fn print_stat(&self) {
         println!(
-            "1: {} 2: {} 4: {} 8: {}",
+            "1: {} 4: {} 8: {}",
             self.single.len(),
-            self.vec2.len(),
             self.vec4.len(),
             self.vec8.len(),
         );
@@ -167,6 +159,10 @@ impl Blocklist {
             + self.vec4.len() * 4
             + self.vec8.len() * 8
             + self.vec16.len() * 16;
+    }
+
+    pub fn get_sizes(&self) -> (usize, usize, usize) {
+        return (self.single.len(), self.vec4.len(), self.vec8.len());
     }
 }
 
@@ -206,6 +202,22 @@ impl Scene {
             .map(|x| Blocklist::from_extents(x))
             .collect::<Vec<_>>();
         println!("blocks done: {:?}", start.elapsed());
+        let sizes = blocks
+            .iter()
+            .map(|x| x.get_sizes())
+            .fold((0, 0, 0), |(acc_a, acc_b, acc_c), (a, b, c)| {
+                (acc_a + a, acc_b + b * 4, acc_c + c * 8)
+            });
+        let size_all = (sizes.0 + sizes.1 + sizes.2) as f32;
+        println!(
+            "sizes: 1: {} {:.4} 4: {} {:.4} 8: {} {:.4}",
+            sizes.0,
+            sizes.0 as f32 / size_all,
+            sizes.1,
+            sizes.1 as f32 / size_all,
+            sizes.2,
+            sizes.2 as f32 / size_all
+        );
 
         Scene {
             emit: vec![Vec3::new(0.0, 0.0, 0.0); planes.num_planes()],
@@ -379,113 +391,75 @@ impl RadWorkblockSimd<'_> {
                 }
             }
 
-            let vdiffuse_r = f32x2::splat(diffuse.x);
-            let vdiffuse_g = f32x2::splat(diffuse.y);
-            let vdiffuse_b = f32x2::splat(diffuse.z);
-            let mut vsum_r = f32x2::splat(0f32);
-            let mut vsum_g = f32x2::splat(0f32);
-            let mut vsum_b = f32x2::splat(0f32);
+            unsafe {
+                type V = Sse2;
 
-            for (j, ff) in ff_i.vec2.iter().zip(&ff_i.vec2_ff) {
-                let j = *j as usize;
-                let jrange = j..j + 2;
-                let ff = *ff;
-                unsafe {
-                    let vr = f32x2::from_slice_aligned_unchecked(r.get_unchecked(jrange.clone()));
-                    let vg = f32x2::from_slice_aligned_unchecked(g.get_unchecked(jrange.clone()));
-                    let vb = f32x2::from_slice_aligned_unchecked(b.get_unchecked(jrange.clone()));
+                let vdiffuse_r = V::set1_ps(diffuse.x);
+                let vdiffuse_g = V::set1_ps(diffuse.y);
+                let vdiffuse_b = V::set1_ps(diffuse.z);
 
-                    vsum_r += vdiffuse_r * ff * vr;
-                    vsum_g += vdiffuse_g * ff * vg;
-                    vsum_b += vdiffuse_b * ff * vb;
+                let mut vsum_r = V::setzero_ps();
+                let mut vsum_g = V::setzero_ps();
+                let mut vsum_b = V::setzero_ps();
+
+                for (j, ff) in ff_i.vec4.iter().zip(&ff_i.vec4_ff) {
+                    // unsafe {
+                    let j = *j as usize;
+                    let jrange = j..j + 8;
+                    let ff = *ff;
+                    unsafe {
+                        let vr = V::load_ps(&r.get_unchecked(j));
+                        let vg = V::load_ps(&g.get_unchecked(j));
+                        let vb = V::load_ps(&b.get_unchecked(j));
+
+                        vsum_r += vdiffuse_r * ff * vr;
+                        vsum_g += vdiffuse_g * ff * vg;
+                        vsum_b += vdiffuse_b * ff * vb;
+                    }
                 }
+                let mut vtmp = [0f32; V::VF32_WIDTH];
+                V::store_ps(&mut vtmp[0], vsum_r);
+                rad_r += vtmp.iter().sum::<f32>();
+                V::store_ps(&mut vtmp[0], vsum_g);
+                rad_g += vtmp.iter().sum::<f32>();
+                V::store_ps(&mut vtmp[0], vsum_b);
+                rad_b += vtmp.iter().sum::<f32>();
             }
 
-            rad_r += vsum_r.sum();
-            rad_g += vsum_g.sum();
-            rad_b += vsum_b.sum();
+            unsafe {
+                type V = Avx2;
 
-            let vdiffuse_r = f32x4::splat(diffuse.x);
-            let vdiffuse_g = f32x4::splat(diffuse.y);
-            let vdiffuse_b = f32x4::splat(diffuse.z);
+                let vdiffuse_r = V::set1_ps(diffuse.x);
+                let vdiffuse_g = V::set1_ps(diffuse.y);
+                let vdiffuse_b = V::set1_ps(diffuse.z);
 
-            let mut vsum_r = f32x4::splat(0f32);
-            let mut vsum_g = f32x4::splat(0f32);
-            let mut vsum_b = f32x4::splat(0f32);
+                let mut vsum_r = V::setzero_ps();
+                let mut vsum_g = V::setzero_ps();
+                let mut vsum_b = V::setzero_ps();
 
-            for (j, ff) in ff_i.vec4.iter().zip(&ff_i.vec4_ff) {
-                // unsafe {
-                let j = *j as usize;
-                let jrange = j..j + 4;
-                let ff = *ff;
-                unsafe {
-                    let vr = f32x4::from_slice_aligned_unchecked(r.get_unchecked(jrange.clone()));
-                    let vg = f32x4::from_slice_aligned_unchecked(g.get_unchecked(jrange.clone()));
-                    let vb = f32x4::from_slice_aligned_unchecked(b.get_unchecked(jrange.clone()));
+                for (j, ff) in ff_i.vec8.iter().zip(&ff_i.vec8_ff) {
+                    // unsafe {
+                    let j = *j as usize;
+                    let jrange = j..j + 8;
+                    let ff = *ff;
+                    unsafe {
+                        let vr = V::load_ps(&r.get_unchecked(j));
+                        let vg = V::load_ps(&g.get_unchecked(j));
+                        let vb = V::load_ps(&b.get_unchecked(j));
 
-                    vsum_r += vdiffuse_r * ff * vr;
-                    vsum_g += vdiffuse_g * ff * vg;
-                    vsum_b += vdiffuse_b * ff * vb;
+                        vsum_r += vdiffuse_r * ff * vr;
+                        vsum_g += vdiffuse_g * ff * vg;
+                        vsum_b += vdiffuse_b * ff * vb;
+                    }
                 }
+                let mut vtmp = [0f32; V::VF32_WIDTH];
+                V::store_ps(&mut vtmp[0], vsum_r);
+                rad_r += vtmp.iter().sum::<f32>();
+                V::store_ps(&mut vtmp[0], vsum_g);
+                rad_g += vtmp.iter().sum::<f32>();
+                V::store_ps(&mut vtmp[0], vsum_b);
+                rad_b += vtmp.iter().sum::<f32>();
             }
-            rad_r += vsum_r.sum();
-            rad_g += vsum_g.sum();
-            rad_b += vsum_b.sum();
-
-            let vdiffuse_r = f32x8::splat(diffuse.x);
-            let vdiffuse_g = f32x8::splat(diffuse.y);
-            let vdiffuse_b = f32x8::splat(diffuse.z);
-
-            let mut vsum_r = f32x8::splat(0f32);
-            let mut vsum_g = f32x8::splat(0f32);
-            let mut vsum_b = f32x8::splat(0f32);
-
-            for (j, ff) in ff_i.vec8.iter().zip(&ff_i.vec8_ff) {
-                // unsafe {
-                let j = *j as usize;
-                let jrange = j..j + 8;
-                let ff = *ff;
-                unsafe {
-                    let vr = f32x8::from_slice_aligned_unchecked(r.get_unchecked(jrange.clone()));
-                    let vg = f32x8::from_slice_aligned_unchecked(g.get_unchecked(jrange.clone()));
-                    let vb = f32x8::from_slice_aligned_unchecked(b.get_unchecked(jrange.clone()));
-
-                    vsum_r += vdiffuse_r * ff * vr;
-                    vsum_g += vdiffuse_g * ff * vg;
-                    vsum_b += vdiffuse_b * ff * vb;
-                }
-            }
-            rad_r += vsum_r.sum();
-            rad_g += vsum_g.sum();
-            rad_b += vsum_b.sum();
-
-            let vdiffuse_r = f32x16::splat(diffuse.x);
-            let vdiffuse_g = f32x16::splat(diffuse.y);
-            let vdiffuse_b = f32x16::splat(diffuse.z);
-
-            let mut vsum_r = f32x16::splat(0f32);
-            let mut vsum_g = f32x16::splat(0f32);
-            let mut vsum_b = f32x16::splat(0f32);
-
-            for (j, ff) in ff_i.vec16.iter().zip(&ff_i.vec16_ff) {
-                // unsafe {
-                let j = *j as usize;
-                let jrange = j..j + 16;
-                let ff = *ff;
-                unsafe {
-                    let vr = f32x16::from_slice_aligned_unchecked(r.get_unchecked(jrange.clone()));
-                    let vg = f32x16::from_slice_aligned_unchecked(g.get_unchecked(jrange.clone()));
-                    let vb = f32x16::from_slice_aligned_unchecked(b.get_unchecked(jrange.clone()));
-
-                    vsum_r += vdiffuse_r * ff * vr;
-                    vsum_g += vdiffuse_g * ff * vg;
-                    vsum_b += vdiffuse_b * ff * vb;
-                }
-            }
-            rad_r += vsum_r.sum();
-            rad_g += vsum_g.sum();
-            rad_b += vsum_b.sum();
-
             self.dest.0[i as usize] = self.emit[i as usize].x + rad_r;
             self.dest.1[i as usize] = self.emit[i as usize].y + rad_g;
             self.dest.2[i as usize] = self.emit[i as usize].z + rad_b;
