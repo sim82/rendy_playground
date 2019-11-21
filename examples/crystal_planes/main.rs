@@ -195,8 +195,8 @@ fn main() {
         let mut graph = Some(graph);
 
         let mut main_loop = game::MainLoop::start(crystal::rads::Scene::new(planes, bm));
-        main_loop.tx_game_event.send(game::GameEvent::SubscribeFrontBuffer(tx_rad_buffer));
-        main_loop.tx_game_event.send(game::GameEvent::UpdateLightPos(crystal::Point3::new( 60f32, 30f32, 50f32 )));
+        main_loop.send_game_event(game::GameEvent::SubscribeFrontBuffer(tx_rad_buffer));
+        main_loop.send_game_event(game::GameEvent::UpdateLightPos(crystal::Point3::new( 60f32, 30f32, 50f32 )));
         let mut main_loop = Some(main_loop);
         let mut light_pos = crystal::Point3::new(50f32, 30f32, 40f32);
         event_loop.run(move |event, _, control_flow| {
@@ -221,7 +221,7 @@ fn main() {
                     light_pos.z += if input_state.z_pos {1f32} else {0f32} + if input_state.z_neg {-1f32} else {0f32};
                     if input_state.x_pos || input_state.z_pos || input_state.x_neg || input_state.z_neg {
                         if let Some(ref main_loop) = main_loop {
-                            main_loop.tx_game_event.send(game::GameEvent::UpdateLightPos(light_pos.clone()));
+                            main_loop.send_game_event(game::GameEvent::UpdateLightPos(light_pos.clone()));
                         }
                     }
 
@@ -256,7 +256,7 @@ fn main() {
             if *control_flow == ControlFlow::Exit {
                 println!("waiting for MainLoop ...");
                 if let Some(main_loop) = main_loop.take() {
-                    main_loop.tx_game_event.send(game::GameEvent::Stop).unwrap();
+                    main_loop.send_game_event(game::GameEvent::Stop);
                     main_loop.join();
                 }
                 println!("done.");

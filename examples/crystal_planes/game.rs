@@ -5,24 +5,28 @@ use rendy_playground::{
     script,
 };
 use std::{
-    sync::mpsc::{channel, sync_channel, Receiver, Sender},
+    // sync::mpsc::{channel, sync_channel, Receiver, Sender},
     thread::{spawn, JoinHandle},
     time::{Duration, Instant},
 };
 pub enum GameEvent {
     UpdateLightPos(Point3),
-    SubscribeFrontBuffer(Sender<std::vec::Vec<Color>>),
+    SubscribeFrontBuffer(std::sync::mpsc::Sender<std::vec::Vec<Color>>),
     Stop,
 }
+use async_std::{
+    sync::{channel, Receiver, Sender},
+    task,
+};
 
 pub struct MainLoop {
-    pub tx_game_event: Sender<GameEvent>,
+    tx_game_event: Sender<GameEvent>,
     join_handle: JoinHandle<()>,
 }
 
 impl MainLoop {
     pub fn start(mut scene: Scene) -> Self {
-        let (tx_game_event, rx_game_event) = channel();
+        let (tx_game_event, rx_game_event) = channel(64);
         let color1 = Vec3::new(1f32, 0.5f32, 0f32);
         // let color2 = hsv_to_rgb(rng.gen_range(0.0, 360.0), 1.0, 1.0);
         let color2 = Vec3::new(0f32, 1f32, 0f32);
@@ -40,54 +44,59 @@ impl MainLoop {
             }
         }
         let join_handle = spawn(move || {
-            let mut do_stop = false;
-            let mut tx_front_buffer = None;
-            let mut light_pos = Point3::new(0f32, 0f32, 0f32);
-            let mut light_update = true;
-            while !do_stop {
-                while let Ok(event) = rx_game_event.try_recv() {
-                    match event {
-                        GameEvent::UpdateLightPos(light_pos_new) => {
-                            light_pos = light_pos_new;
-                            light_update = true;
-                        }
-                        GameEvent::SubscribeFrontBuffer(sender) => {
-                            tx_front_buffer = Some(sender);
-                        }
-                        GameEvent::Stop => do_stop = true,
-                    }
-                }
-
-                if light_update {
-                    scene.clear_emit();
-                    scene.apply_light(light_pos, Vec3::new(1f32, 0.8f32, 0.6f32));
-                }
-                scene.do_rad();
-                let sum = scene.rad_front.r.iter().sum::<f32>()
-                    + scene.rad_front.g.iter().sum::<f32>()
-                    + scene.rad_front.b.iter().sum::<f32>();
-                println!("sum: {}", sum);
-                if let Some(ref mut tx_front_buffer) = tx_front_buffer {
-                    let mut colors_cpu = vec![];
-                    colors_cpu.reserve(scene.planes.planes.len());
-                    for (i, _) in scene.planes.planes_iter().enumerate() {
-                        colors_cpu.push(Vec3::new(
-                            scene.rad_front.r[i],
-                            scene.rad_front.g[i],
-                            scene.rad_front.b[i],
-                        ));
-                    }
-                    // println!("send fornt buffer");
-                    tx_front_buffer.send(colors_cpu).unwrap();
-                }
-            }
+            task::block_on(MainLoop::start_async(scene, rx_game_event));
         });
-
         MainLoop {
             tx_game_event,
             join_handle,
         }
     }
+    async fn start_async(mut scene: Scene, rx_game_event: Receiver<GameEvent>) {
+        let mut do_stop = false;
+        let mut tx_front_buffer = None;
+        let mut light_pos = Point3::new(0f32, 0f32, 0f32);
+        let mut light_update = true;
+        while !do_stop {
+            match rx_game_event.recv().await.unwrap() {
+                GameEvent::UpdateLightPos(light_pos_new) => {
+                    light_pos = light_pos_new;
+                    light_update = true;
+                }
+                GameEvent::SubscribeFrontBuffer(sender) => {
+                    tx_front_buffer = Some(sender);
+                }
+                GameEvent::Stop => do_stop = true,
+            }
+
+            if light_update {
+                scene.clear_emit();
+                scene.apply_light(light_pos, Vec3::new(1f32, 0.8f32, 0.6f32));
+            }
+            scene.do_rad();
+            let sum = scene.rad_front.r.iter().sum::<f32>()
+                + scene.rad_front.g.iter().sum::<f32>()
+                + scene.rad_front.b.iter().sum::<f32>();
+            println!("sum: {}", sum);
+            if let Some(ref mut tx_front_buffer) = tx_front_buffer {
+                let mut colors_cpu = vec![];
+                colors_cpu.reserve(scene.planes.planes.len());
+                for (i, _) in scene.planes.planes_iter().enumerate() {
+                    colors_cpu.push(Vec3::new(
+                        scene.rad_front.r[i],
+                        scene.rad_front.g[i],
+                        scene.rad_front.b[i],
+                    ));
+                }
+                // println!("send fornt buffer");
+                tx_front_buffer.send(colors_cpu).unwrap();
+            }
+        }
+    }
+
+    pub fn send_game_event(&self, event: GameEvent) {
+        task::block_on(async move { self.tx_game_event.send(event).await })
+    }
+
     pub fn join(self) {
         self.join_handle.join();
     }

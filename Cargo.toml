@@ -9,6 +9,7 @@ edition = "2018"
 vulkan = []
 
 [dependencies]
+async-std = {version = "*", features = ["unstable"]}
 bincode = "*"
 clap = "*"
 env_logger = "*"
